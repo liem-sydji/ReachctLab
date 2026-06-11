@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Build output
+dist/
+build/
+
+# Environment
+.env
+.env.local
+
+# Generated Excel files
+*.xlsx
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log

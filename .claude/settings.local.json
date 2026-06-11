@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\cash\\\\developments\\\\lab\\\\reachctlab\" -Recurse -Depth 3)",
+      "Bash(Select-Object FullName)",
+      "PowerShell(head -80)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\cash\\\\developments\\\\lab\\\\reachctlab\\\\frontend\\\\src\\\\components\" -Recurse)",
+      "Bash(Select-Object -ExpandProperty FullName)"
+    ]
+  }
+}
