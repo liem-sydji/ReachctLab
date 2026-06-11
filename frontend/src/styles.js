@@ -1,6 +1,6 @@
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 // Point this at your LAB backend (separate Railway project), NOT production.
-export const API = "https://reachctlab-production.up.railway.app/";
+export const API = "https://reachctlab-production.up.railway.app";
 
 export const ADMIN_PASSWORD = "reachct2026";
 
