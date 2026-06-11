@@ -9,7 +9,7 @@ export const ADMIN_PASSWORD = "reachct2026";
 // 2. Enable "Google Sign-In" (OAuth consent screen + credentials)
 // 3. Add your Cloudflare Pages domain to Authorized JavaScript origins
 // 4. Paste your Client ID below
-export const GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID_HERE";
+export const GOOGLE_CLIENT_ID = "863794295102-us9cq39mkd6s6su7u0380hr2ncrice5b.apps.googleusercontent.com";
 
 // ─── COMPANY TYPES (grouped alphabetically for <optgroup>) ────────────────────
 export const COMPANY_TYPES_GROUPED = {
