@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext.jsx";
 import { API, COMPANY_TYPES_GROUPED } from "../styles.js";
 import { SearchIcon, DownloadIcon, CopyIcon, StopIcon } from "../components/icons.jsx";
 import { InnerHeader, ResultsTable } from "../components/shared.jsx";
+import AddToDBModal from "../components/AddToDBModal.jsx";
 
 export default function SearchPage() {
-  const navigate = useNavigate();
+  const navigate         = useNavigate();
+  const { user, token }  = useAuth();
   const [query,    setQuery]    = useState("");
   const [city,     setCity]     = useState("");
   const [country,  setCountry]  = useState("");
@@ -17,63 +20,53 @@ export default function SearchPage() {
   const [searched, setSearched] = useState(false);
   const [error,    setError]    = useState("");
   const [jobId,    setJobId]    = useState(null);
+  const [showAddDB, setShowAddDB] = useState(false);
   const pollRef = useRef(null);
 
   const handleSearch = async () => {
-    if (!query || !city || !country) { setError("Please fill in all fields."); return; }
+    if (!query||!city||!country) { setError("Please fill in all fields."); return; }
     setError(""); setLoading(true); setSearched(false); setResults([]);
     setLoadMsg("Connecting to Google Maps...");
     try {
       const res  = await fetch(`${API}/api/scrape?query=${encodeURIComponent(query)}&city=${encodeURIComponent(city)}&country=${encodeURIComponent(country)}&start=${start}&end=${end}`);
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Failed to start search");
-      const jid = data.job_id;
-      setJobId(jid);
-      setLoadMsg("Your search is in progress — this may take a couple of minutes. Come back when it's ready, your results will appear here automatically.");
-
+      if (!res.ok) throw new Error(data.detail||"Failed to start search");
+      setJobId(data.job_id);
+      setLoadMsg("Your search is in progress — this may take a couple of minutes. Come back when it's ready.");
       pollRef.current = setInterval(async () => {
         try {
-          const jr = await fetch(`${API}/api/job/${jid}`);
+          const jr = await fetch(`${API}/api/job/${data.job_id}`);
           const jd = await jr.json();
-          if (jd.status === "done" || jd.status === "cancelled") {
+          if (jd.status==="done"||jd.status==="cancelled") {
             clearInterval(pollRef.current);
-            setResults(jd.results || []);
-            setSearched(true); setLoading(false); setJobId(null);
-          } else if (jd.status === "error") {
-            clearInterval(pollRef.current);
-            setError(jd.error || "Something went wrong");
-            setLoading(false);
+            setResults(jd.results||[]); setSearched(true); setLoading(false); setJobId(null);
+          } else if (jd.status==="error") {
+            clearInterval(pollRef.current); setError(jd.error||"Something went wrong"); setLoading(false);
+          } else if (jd.queue_position>0||jd.status==="starting") {
+            setLoadMsg(`Your search is in queue at position ${jd.queue_position||1} — this might take a while. Your results will be saved automatically.`);
           } else {
-            const queuePos = jd.queue_position;
-            if (queuePos > 0 || jd.status === "starting") {
-              setLoadMsg(`Your search is in queue at position ${queuePos || 1} — this might take a while before other searches are done. Your results will be saved automatically.`);
-            } else {
-              setLoadMsg("Your search is in progress — this may take a couple of minutes. Come back when it's ready, your results will appear here automatically.");
-            }
+            setLoadMsg("Your search is in progress — this may take a couple of minutes. Come back when it's ready.");
           }
-        } catch { /* keep polling */ }
+        } catch {}
       }, 4000);
-    } catch (e) {
-      setError(e.message); setLoading(false);
-    }
+    } catch (e) { setError(e.message); setLoading(false); }
   };
 
   const handleCancel = async () => {
     if (!jobId) return;
-    try { await fetch(`${API}/api/job/${jobId}/cancel`, { method: "POST" }); setLoadMsg("Cancelling…"); } catch { /* ignore */ }
+    try { await fetch(`${API}/api/job/${jobId}/cancel`, { method:"POST" }); setLoadMsg("Cancelling…"); } catch {}
   };
 
   const handleExport = () => {
-    const url = `${API}/api/export?query=${encodeURIComponent(query)}&city=${encodeURIComponent(city)}&country=${encodeURIComponent(country)}`;
-    window.open(url, "_blank");
+    window.open(`${API}/api/export?query=${encodeURIComponent(query)}&city=${encodeURIComponent(city)}&country=${encodeURIComponent(country)}`, "_blank");
   };
 
   const handleCopy = () => {
     if (!results.length) return;
-    const headers = ["Company Name", "Email", "Phone", "Website", "City", "Country", "Company Type"];
-    const rows = results.map(r => [r.name||"", r.email||"", r.phone||"", r.website||"", r.city||"", r.country||"", r.company_type||""]);
-    const tsv = [headers, ...rows].map(r => r.join("\t")).join("\n");
-    navigator.clipboard.writeText(tsv).then(() => alert("Copied! Paste into Google Sheets or Excel."));
+    const headers = ["Company Name","Email","Phone","Website","City","Country","Company Type"];
+    const rows    = results.map(r => [r.name||"",r.email||"",r.phone||"",r.website||"",r.city||"",r.country||"",r.company_type||""]);
+    const tsv     = [headers,...rows].map(r=>r.join("\t")).join("\n");
+    navigator.clipboard.writeText(tsv).then(()=>alert("Copied! Paste into Google Sheets or Excel."));
   };
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
@@ -85,11 +78,10 @@ export default function SearchPage() {
       <div className="form-area">
         <div className="form-card">
           <div className="form-title">Search Google Maps</div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 0.6fr 0.6fr", gap: 16, marginBottom: 16 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 0.6fr 0.6fr", gap:16, marginBottom:16 }}>
             <div>
               <label className="field-label">Business Type</label>
-              <select className="field-select" value={query} onChange={e => setQuery(e.target.value)}>
+              <select className="field-select" value={query} onChange={e=>setQuery(e.target.value)}>
                 <option value="">Select company type…</option>
                 {Object.entries(COMPANY_TYPES_GROUPED).map(([letter, types]) => (
                   <optgroup key={letter} label={`── ${letter} ──`}>
@@ -100,47 +92,39 @@ export default function SearchPage() {
             </div>
             <div>
               <label className="field-label">City</label>
-              <input className="field-input" value={city} onChange={e => setCity(e.target.value)} placeholder="e.g. Munich" />
+              <input className="field-input" value={city} onChange={e=>setCity(e.target.value)} placeholder="e.g. Munich"/>
             </div>
             <div>
               <label className="field-label">Country</label>
-              <input className="field-input" value={country} onChange={e => setCountry(e.target.value)} placeholder="e.g. Germany" />
+              <input className="field-input" value={country} onChange={e=>setCountry(e.target.value)} placeholder="e.g. Germany"/>
             </div>
             <div>
               <label className="field-label">Start</label>
               <input className="field-input" type="number" min="0" value={start}
-                onChange={e => { const v = e.target.value; setStart(v === "" ? "" : Number(v)); }}
-                onBlur={e => { if (e.target.value === "") setStart(0); }} />
+                onChange={e=>{ const v=e.target.value; setStart(v===""?"":Number(v)); }}
+                onBlur={e=>{ if(e.target.value==="") setStart(0); }}/>
             </div>
             <div>
               <label className="field-label">End (max +50)</label>
               <input className="field-input" type="number" min="1" value={end}
-                onChange={e => { const v = e.target.value; setEnd(v === "" ? "" : Math.min(Number(v), (start || 0) + 50)); }}
-                onBlur={e => { if (e.target.value === "") setEnd(25); }} />
+                onChange={e=>{ const v=e.target.value; setEnd(v===""?"":Math.min(Number(v),(start||0)+50)); }}
+                onBlur={e=>{ if(e.target.value==="") setEnd(25); }}/>
             </div>
           </div>
-
           <p className="hint">Use English spelling — "Spain" not "España", "Munich" not "München"</p>
           <p className="batch-tip">
-            💡 <strong>Tip:</strong> Run searches in batches of 25 for quicker results — e.g. 0→25, then 25→50, then 50→75.
-            Each batch saves automatically to the database.
-            &nbsp;<button className="batch-tip-link" onClick={() => navigate("/info")}>How to use ReachCT →</button>
+            💡 <strong>Tip:</strong> Run searches in batches of 25 for quicker results — e.g. 0→25, then 25→50.&nbsp;
+            <button className="batch-tip-link" onClick={()=>navigate("/info")}>How to use ReachCT →</button>
           </p>
-
           <div className="btn-row">
             <button className="btn-primary" onClick={handleSearch} disabled={loading}>
-              <SearchIcon />{loading ? "Searching…" : "Search"}
+              <SearchIcon/>{loading?"Searching…":"Search"}
             </button>
-            {loading && <button className="btn-danger" onClick={handleCancel}><StopIcon />Stop</button>}
+            {loading && <button className="btn-danger" onClick={handleCancel}><StopIcon/>Stop</button>}
           </div>
-
           {error && <div className="error-msg">{error}</div>}
-          {loading && (
-            <div className="loading-area">
-              <div className="spinner" />
-              <p className="loading-msg">{loadMsg}</p>
-            </div>
-          )}
+          {loading && <div className="loading-area"><div className="spinner"/>
+            <p className="loading-msg">{loadMsg}</p></div>}
         </div>
       </div>
 
@@ -148,17 +132,29 @@ export default function SearchPage() {
         <div className="results-area">
           <div className="results-header">
             <div className="results-count">
-              <span>{results.length}</span> companies found
-              &nbsp;·&nbsp;
-              <span style={{ color: "#E8005A" }}>{results.filter(r => r.email).length}</span> emails found
+              <span>{results.length}</span> companies found &nbsp;·&nbsp;
+              <span style={{ color:"#E8005A" }}>{results.filter(r=>r.email).length}</span> emails found
             </div>
             <div className="btn-row">
-              <button className="btn-secondary" onClick={handleExport}><DownloadIcon />Export Excel</button>
-              <button className="btn-secondary" onClick={handleCopy}><CopyIcon />Copy Table</button>
+              {user && (
+                <button className="btn-primary" onClick={()=>setShowAddDB(true)}>
+                  + Add to Database
+                </button>
+              )}
+              <button className="btn-secondary" onClick={handleExport}><DownloadIcon/>Export Excel</button>
+              <button className="btn-secondary" onClick={handleCopy}><CopyIcon/>Copy Table</button>
             </div>
           </div>
-          <ResultsTable data={results} />
+          <ResultsTable data={results}/>
         </div>
+      )}
+
+      {showAddDB && (
+        <AddToDBModal
+          rows={results.map(r=>({ name:r.name||"", email:r.email||"", phone:r.phone||"",
+            website:r.website||"", city:r.city||"", country:r.country||"", company_type:r.company_type||"" }))}
+          onClose={()=>setShowAddDB(false)}
+        />
       )}
     </div>
   );

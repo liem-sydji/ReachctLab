@@ -458,3 +458,24 @@ def remove_collaborator(db_id: int, owner_id: int, target_user_id: int) -> bool:
         raise e
     finally:
         conn.close()
+
+
+def rename_column_in_db(db_id: int, old_name: str, new_name: str) -> int:
+    """Rename a key in all JSONB entries for a database."""
+    conn = get_conn()
+    c    = conn.cursor()
+    try:
+        # Use PostgreSQL JSONB rename: remove old key, set new key with old value
+        c.execute("""
+            UPDATE user_database_entries
+            SET data = (data - %s) || jsonb_build_object(%s, data->%s)
+            WHERE database_id = %s AND data ? %s
+        """, (old_name, new_name, old_name, db_id, old_name))
+        count = c.rowcount
+        conn.commit()
+        return count
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
