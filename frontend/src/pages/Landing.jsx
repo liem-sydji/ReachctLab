@@ -77,6 +77,17 @@ export default function Landing() {
             </div>
           </div>
         )}
+        {user && (
+          <div className="landing-card" onClick={()=>navigate("/ai")} style={{ borderColor:"rgba(232,0,90,0.2)" }}>
+            <div className="card-icon" style={{ background:"linear-gradient(135deg,rgba(232,0,90,0.15),rgba(232,0,90,0.05))" }}>
+              <span style={{ fontSize:18 }}>✦</span>
+            </div>
+            <div>
+              <div className="card-title">Ask ReachAI</div>
+              <div className="card-desc">Search, manage databases and get insights by just asking</div>
+            </div>
+          </div>
+        )}
       </div>
 
       <button className="landing-info-link" onClick={()=>navigate("/info")}>

@@ -324,33 +324,22 @@ async def upload_file(db_id: int, file: UploadFile = File(...), authorization: s
             max_tokens=4000,
             messages=[{
                 "role": "user",
-                "content": f"""You are a data cleaning assistant. Analyze this raw spreadsheet data and extract company contact information.
+                "content": f"""You are a data extraction specialist. Your job is to find company contact information in messy, unlabeled spreadsheet data.
 
-The data may have no headers, inconsistent formatting, or mixed column orders.
+The data below may have: no headers, wrong column order, empty rows, mixed languages, extra noise, or partial information.
 
 Raw data:
 {raw_text}
 
-Your task:
-1. Identify which values are: company names, emails, phones, websites, cities, countries, company types
-2. Return ONLY a valid JSON array of objects. Each object should have these keys (use empty string "" if unknown):
-   - name (company name)
-   - email
-   - phone
-   - website
-   - city
-   - country
-   - company_type
+Instructions:
+1. Scan every non-empty row for company information
+2. Use context clues to identify: company name (usually a proper noun/business name), email (contains @), phone (digits with +/spaces/dashes), website (contains . or http), city (place name), country (country name), company type (business category)
+3. Even if a row is missing most fields, include it if it has at least a company name OR email
+4. Return ONLY a valid JSON array — no explanation, no markdown, no code fences
+5. Each object must have exactly these keys (empty string "" if unknown): name, email, phone, website, city, country, company_type
+6. Clean: lowercase emails, keep only digits/+/spaces in phones, skip rows that are completely empty or clearly not company data
 
-Rules:
-- Skip completely empty rows
-- Clean phone numbers (keep digits and + only)
-- Lowercase emails
-- Do not invent data — only use what's in the file
-- Return ONLY the JSON array, no explanation, no markdown
-
-Example output format:
-[{{"name":"Acme Corp","email":"info@acme.com","phone":"+34612345678","website":"acme.com","city":"Madrid","country":"Spain","company_type":""}}]"""
+Return ONLY the JSON array starting with [ and ending with ]"""
             }]
         )
 
@@ -524,3 +513,196 @@ Return ONLY the JSON array, no explanation."""}]
         raise HTTPException(status_code=422, detail="Claude could not parse the file. Please ensure it contains company data.")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Upload failed: {str(e)}")
+
+
+# ── ReachAI — Claude agent endpoint ──────────────────────────────────────────
+from ai_tools import (
+    tool_list_databases, tool_get_database_contents, tool_get_database_stats,
+    tool_pull_from_database, tool_save_to_database, tool_create_database,
+    tool_search_google_maps,
+)
+
+REACHAI_TOOLS = [
+    {
+        "name": "list_databases",
+        "description": "List all databases the user has access to, with row counts.",
+        "input_schema": {"type": "object", "properties": {}, "required": []}
+    },
+    {
+        "name": "get_database_contents",
+        "description": "Get the entries/rows from a specific user database.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "db_id": {"type": "integer", "description": "The database ID"}
+            },
+            "required": ["db_id"]
+        }
+    },
+    {
+        "name": "get_database_stats",
+        "description": "Get stats about the shared ReachCT database — total companies, breakdown by country, email find rate.",
+        "input_schema": {"type": "object", "properties": {}, "required": []}
+    },
+    {
+        "name": "pull_from_database",
+        "description": "Pull companies from the shared database with optional filters.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "queries":   {"type": "array", "items": {"type": "string"}, "description": "Company types e.g. ['Marketing Agency']"},
+                "cities":    {"type": "array", "items": {"type": "string"}, "description": "Cities e.g. ['Madrid', 'Berlin']"},
+                "countries": {"type": "array", "items": {"type": "string"}, "description": "Countries e.g. ['Spain']"},
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "save_to_database",
+        "description": "Save a list of company rows to a user database.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "db_id": {"type": "integer", "description": "The database ID to save to"},
+                "rows":  {"type": "array",   "items": {"type": "object"}, "description": "List of company objects"}
+            },
+            "required": ["db_id", "rows"]
+        }
+    },
+    {
+        "name": "create_database",
+        "description": "Create a new user database with a given name. Only call this after user confirms.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The name for the new database"}
+            },
+            "required": ["name"]
+        }
+    },
+    {
+        "name": "search_google_maps",
+        "description": "Search Google Maps for companies and scrape their contact info. This runs in the background and may take several minutes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query":   {"type": "string",  "description": "Business type e.g. 'Marketing Agency'"},
+                "city":    {"type": "string",  "description": "City e.g. 'Madrid'"},
+                "country": {"type": "string",  "description": "Country e.g. 'Spain'"},
+                "start":   {"type": "integer", "description": "Start index (default 0)"},
+                "end":     {"type": "integer", "description": "End index max start+50 (default 25)"}
+            },
+            "required": ["query", "city", "country"]
+        }
+    },
+]
+
+REACHAI_SYSTEM = """You are ReachAI, an intelligent assistant built into ReachCT — a B2B contact intelligence platform.
+
+You have access to tools that let you:
+- Search Google Maps for company contacts (takes a few minutes, runs in background)
+- Pull companies from the shared ReachCT database
+- View and save to the user's personal databases
+- Get database statistics
+
+Guidelines:
+- Be concise and action-oriented. When a task is done, confirm it and provide the relevant link or data.
+- For database links use: /dashboard/db/{id}
+- When the user asks you to save to a database by name, first call list_databases to find the right one. If it doesn't exist, ask the user to confirm before creating it.
+- When running a search, warn the user it takes a few minutes and report results when done.
+- You can answer questions about the data using get_database_stats or get_database_contents.
+- Keep responses short unless the user asks for detail.
+"""
+
+class ReachAIRequest(BaseModel):
+    messages: list  # full conversation history [{role, content}]
+
+@app.post("/api/ai/chat")
+async def reachai_chat(body: ReachAIRequest, authorization: str = Header(default=None)):
+    """ReachAI — agentic Claude endpoint with tool use."""
+    import anthropic
+    import threading
+
+    user    = get_current_user(authorization)
+    user_id = int(user["sub"])
+    client  = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
+
+    messages = list(body.messages)
+    MAX_ITERS = 10
+
+    for _ in range(MAX_ITERS):
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2000,
+            system=REACHAI_SYSTEM,
+            tools=REACHAI_TOOLS,
+            messages=messages,
+        )
+
+        # Collect all text and tool_use blocks
+        assistant_content = response.content
+        messages.append({"role": "assistant", "content": assistant_content})
+
+        if response.stop_reason == "end_turn":
+            # Extract final text
+            text = " ".join(b.text for b in assistant_content if hasattr(b, "text"))
+            return {"reply": text, "messages": messages}
+
+        if response.stop_reason != "tool_use":
+            text = " ".join(b.text for b in assistant_content if hasattr(b, "text"))
+            return {"reply": text, "messages": messages}
+
+        # Execute tool calls
+        tool_results = []
+        for block in assistant_content:
+            if block.type != "tool_use":
+                continue
+            tool_name  = block.name
+            tool_input = block.input
+
+            try:
+                if tool_name == "list_databases":
+                    result = tool_list_databases(user_id)
+                elif tool_name == "get_database_contents":
+                    result = tool_get_database_contents(user_id, tool_input["db_id"])
+                elif tool_name == "get_database_stats":
+                    result = tool_get_database_stats(user_id)
+                elif tool_name == "pull_from_database":
+                    result = tool_pull_from_database(
+                        tool_input.get("queries", []),
+                        tool_input.get("cities", []),
+                        tool_input.get("countries", []),
+                    )
+                elif tool_name == "save_to_database":
+                    result = tool_save_to_database(user_id, tool_input["db_id"], tool_input["rows"])
+                elif tool_name == "create_database":
+                    result = tool_create_database(user_id, tool_input["name"])
+                elif tool_name == "search_google_maps":
+                    # Run in separate thread since it blocks
+                    search_result = {}
+                    def run_search():
+                        search_result.update(tool_search_google_maps(
+                            tool_input["query"],
+                            tool_input["city"],
+                            tool_input["country"],
+                            tool_input.get("start", 0),
+                            tool_input.get("end", 25),
+                            jobs, search_queue,
+                        ))
+                    t = threading.Thread(target=run_search)
+                    t.start(); t.join()
+                    result = search_result
+                else:
+                    result = {"error": f"Unknown tool: {tool_name}"}
+            except Exception as e:
+                result = {"error": str(e)}
+
+            tool_results.append({
+                "type":        "tool_result",
+                "tool_use_id": block.id,
+                "content":     json.dumps(result),
+            })
+
+        messages.append({"role": "user", "content": tool_results})
+
+    return {"reply": "I reached the maximum number of steps. Please try a simpler request.", "messages": messages}
