@@ -1,6 +1,6 @@
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 // Point this at your LAB backend (separate Railway project), NOT production.
-export const API = "https://your-lab-backend.up.railway.app";
+export const API = "https://reachctlab-production.up.railway.app";
 
 export const ADMIN_PASSWORD = "reachct2026";
 
@@ -49,6 +49,29 @@ export const css = `
   a { color: inherit; text-decoration: none; }
 
   /* ── Landing ── */
+  .landing-signin-btn {
+    position: absolute;
+    top: 24px;
+    right: 28px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 50px;
+    padding: 10px 22px;
+    color: rgba(255,255,255,0.8);
+    font-size: 13px;
+    font-weight: 500;
+    font-family: 'DM Sans', sans-serif;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    letter-spacing: 0.02em;
+    backdrop-filter: blur(10px);
+  }
+  .landing-signin-btn:hover {
+    background: rgba(255,255,255,0.12);
+    color: #fff;
+    border-color: rgba(255,255,255,0.25);
+    transform: translateY(-1px);
+  }
   .landing {
     min-height: 100vh;
     background: #0a0a0a;
