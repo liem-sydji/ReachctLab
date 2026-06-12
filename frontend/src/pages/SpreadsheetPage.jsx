@@ -449,64 +449,6 @@ function SpreadsheetGrid({ entries, columns, setColumns, onCellChange, onDeleteR
   // ── Column drag ──
   const handleDragStart = (col) => setDragCol(col);
   const handleDragOver  = (e, col) => { e.preventDefault(); setDragOverCol(col); };
-  // ── Clipboard copy/paste ──
-  const [copiedRows, setCopiedRows] = useState([]);
-  const [selectedRows, setSelectedRows] = useState(new Set());
-
-  const toggleSelectRow = (entryId) => {
-    setSelectedRows(prev => {
-      const next = new Set(prev);
-      if (next.has(entryId)) next.delete(entryId); else next.add(entryId);
-      return next;
-    });
-  };
-
-  const handleCopyRows = () => {
-    const rows = entries.filter(e => selectedRows.has(e.id));
-    if (!rows.length) return;
-    setCopiedRows(rows.map(e => e.data || {}));
-    // Also copy as TSV to system clipboard
-    const tsv = [columns, ...rows.map(e => columns.map(c => e.data?.[c]||""))].map(r => r.join("\t")).join("\n");
-    navigator.clipboard.writeText(tsv).catch(()=>{});
-  };
-
-  const handlePasteRows = async () => {
-    // Paste from internal copy
-    if (copiedRows.length > 0) {
-      const res = await fetch(`${API}/api/databases/${dbId}/entries`, {
-        method:"POST",
-        headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
-        body:JSON.stringify({rows: copiedRows}),
-      });
-      if (res.ok) fetchAll();
-      return;
-    }
-    // Paste from system clipboard (Excel rows)
-    try {
-      const text = await navigator.clipboard.readText();
-      const lines = text.trim().split("\n").filter(l=>l.trim());
-      if (!lines.length) return;
-      // Detect if first line is a header
-      const firstLine  = lines[0].split("\t");
-      const hasHeader  = firstLine.some(cell => columns.includes(cell.toLowerCase().trim()));
-      const dataLines  = hasHeader ? lines.slice(1) : lines;
-      const headerLine = hasHeader ? firstLine.map(h=>h.toLowerCase().trim()) : columns;
-      const rows = dataLines.map(line => {
-        const cells = line.split("\t");
-        const row   = {};
-        headerLine.forEach((h, i) => { if (cells[i]!==undefined) row[h] = cells[i]; });
-        return row;
-      });
-      if (!rows.length) return;
-      const res = await fetch(`${API}/api/databases/${dbId}/entries`, {
-        method:"POST",
-        headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
-        body:JSON.stringify({rows}),
-      });
-      if (res.ok) { setColumns(prev=>[...new Set([...prev, ...Object.keys(rows[0])])]); fetchAll(); }
-    } catch {}
-  };
-
   const handleDrop      = (col) => {
     if (!dragCol || dragCol === col) { setDragCol(null); setDragOverCol(null); return; }
     const newCols = [...columns];
@@ -694,6 +636,58 @@ export default function SpreadsheetPage() {
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({});
   const [modal, setModal]     = useState(null);
+  const [selectedRows, setSelectedRows] = useState(new Set());
+  const [copiedRows,   setCopiedRows]   = useState([]);
+
+  const toggleSelectRow = (entryId) => {
+    setSelectedRows(prev => {
+      const next = new Set(prev);
+      if (next.has(entryId)) next.delete(entryId); else next.add(entryId);
+      return next;
+    });
+  };
+
+  const handleCopyRows = () => {
+    const rows = entries.filter(e => selectedRows.has(e.id));
+    if (!rows.length) return;
+    setCopiedRows(rows.map(e => e.data || {}));
+    const tsv = [columns, ...rows.map(e => columns.map(c => e.data?.[c]||""))].map(r => r.join("\t")).join("\n");
+    navigator.clipboard.writeText(tsv).catch(()=>{});
+  };
+
+  const handlePasteRows = async () => {
+    if (copiedRows.length > 0) {
+      const res = await fetch(`${API}/api/databases/${dbId}/entries`, {
+        method:"POST",
+        headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
+        body:JSON.stringify({rows: copiedRows}),
+      });
+      if (res.ok) fetchAll();
+      return;
+    }
+    try {
+      const text = await navigator.clipboard.readText();
+      const lines = text.trim().split("\n").filter(l=>l.trim());
+      if (!lines.length) return;
+      const firstLine  = lines[0].split("\t");
+      const hasHeader  = firstLine.some(cell => columns.includes(cell.toLowerCase().trim()));
+      const dataLines  = hasHeader ? lines.slice(1) : lines;
+      const headerLine = hasHeader ? firstLine.map(h=>h.toLowerCase().trim()) : columns;
+      const rows = dataLines.map(line => {
+        const cells = line.split("\t");
+        const row   = {};
+        headerLine.forEach((h, i) => { if (cells[i]!==undefined) row[h] = cells[i]; });
+        return row;
+      });
+      if (!rows.length) return;
+      const res = await fetch(`${API}/api/databases/${dbId}/entries`, {
+        method:"POST",
+        headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
+        body:JSON.stringify({rows}),
+      });
+      if (res.ok) { setColumns(prev=>[...new Set([...prev, ...Object.keys(rows[0])])]); fetchAll(); }
+    } catch {}
+  };
 
   useEffect(() => {
     if (!token) { navigate("/login"); return; }
