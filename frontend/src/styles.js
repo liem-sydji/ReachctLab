@@ -1,14 +1,10 @@
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 // Point this at your LAB backend (separate Railway project), NOT production.
-export const API = "https://reachctlab-production.up.railway.app";
+export const API = "https://your-lab-backend.up.railway.app";
 
 export const ADMIN_PASSWORD = "reachct2026";
 
-// Google OAuth Client ID — from Google Cloud Console → APIs & Services → Credentials
-// 1. Create a project at console.cloud.google.com
-// 2. Enable "Google Sign-In" (OAuth consent screen + credentials)
-// 3. Add your Cloudflare Pages domain to Authorized JavaScript origins
-// 4. Paste your Client ID below
+// Google OAuth Client ID
 export const GOOGLE_CLIENT_ID = "863794295102-us9cq39mkd6s6su7u0380hr2ncrice5b.apps.googleusercontent.com";
 
 // ─── COMPANY TYPES (grouped alphabetically for <optgroup>) ────────────────────
@@ -172,31 +168,6 @@ export const css = `
   .info-body ol { margin: 0; padding-left: 20px; }
   .info-body li { margin-bottom: 8px; }
   .info-divider { height: 1px; background: #eee; margin-top: 48px; }
-
-  /* ── Auth — login page card ── */
-  .auth-card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 40px 36px; max-width: 360px; width: 100%; text-align: center; backdrop-filter: blur(10px); animation: fadeUp 0.6s 0.15s ease both; }
-  .auth-card-title { font-family: 'Syne', sans-serif; font-size: 22px; font-weight: 800; color: #fff; margin-bottom: 8px; letter-spacing: -0.4px; }
-  .auth-card-sub { font-size: 13px; color: rgba(255,255,255,0.4); margin-bottom: 28px; }
-  .auth-google-btn { display: flex; justify-content: center; }
-  .auth-error { margin-top: 16px; font-size: 13px; color: #ff8fab; background: rgba(232,0,90,0.12); border: 1px solid rgba(232,0,90,0.25); border-radius: 8px; padding: 10px 14px; }
-
-  /* ── Landing — top-right auth chip ── */
-  .landing-user-chip { position: absolute; top: 20px; right: 20px; display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 50px; padding: 5px 12px 5px 5px; backdrop-filter: blur(10px); animation: fadeIn 0.3s ease; }
-  .landing-user-avatar { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; }
-  .landing-user-name { font-size: 12px; color: rgba(255,255,255,0.75); font-weight: 500; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .landing-user-logout { background: none; border: none; color: rgba(255,255,255,0.35); font-size: 12px; cursor: pointer; padding: 0 0 0 6px; font-family: 'DM Sans', sans-serif; transition: color 0.15s; }
-  .landing-user-logout:hover { color: rgba(255,255,255,0.75); }
-  .landing-signin-btn { position: absolute; top: 20px; right: 20px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 50px; padding: 7px 18px; color: rgba(255,255,255,0.65); font-size: 12px; font-family: 'DM Sans', sans-serif; cursor: pointer; transition: all 0.2s ease; animation: fadeIn 0.3s ease; }
-  .landing-signin-btn:hover { background: rgba(255,255,255,0.1); color: #fff; border-color: rgba(255,255,255,0.22); }
-
-  /* ── Header — right-side user section ── */
-  .header-user { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-  .header-user-avatar { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; border: 1.5px solid #eee; }
-  .header-user-name { font-size: 12px; color: #777; font-weight: 500; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .header-signin-link { background: none; border: 1px solid #e8e8e8; border-radius: 50px; padding: 5px 14px; font-size: 12px; color: #666; font-family: 'DM Sans', sans-serif; cursor: pointer; transition: all 0.15s ease; }
-  .header-signin-link:hover { border-color: #E8005A; color: #E8005A; }
-  .header-logout-btn { background: none; border: none; font-size: 11px; color: #bbb; cursor: pointer; font-family: 'DM Sans', sans-serif; padding: 4px 8px; border-radius: 6px; transition: all 0.15s; }
-  .header-logout-btn:hover { color: #666; background: #f5f5f5; }
 
   /* ── Animations ── */
   @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }

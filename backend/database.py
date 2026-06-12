@@ -4,6 +4,7 @@ PostgreSQL database layer.
 """
 
 import os
+import uuid
 import psycopg2
 import psycopg2.extras
 from datetime import datetime
@@ -18,6 +19,8 @@ def get_conn():
 def init_db():
     conn = get_conn()
     c    = conn.cursor()
+
+    # Users
     c.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id          SERIAL PRIMARY KEY,
@@ -29,6 +32,8 @@ def init_db():
             last_login  TIMESTAMP DEFAULT NOW()
         )
     """)
+
+    # Shared companies
     c.execute("""
         CREATE TABLE IF NOT EXISTS companies (
             id           SERIAL PRIMARY KEY,
@@ -45,6 +50,8 @@ def init_db():
             UNIQUE(name, city, country)
         )
     """)
+
+    # Searches log
     c.execute("""
         CREATE TABLE IF NOT EXISTS searches (
             id          SERIAL PRIMARY KEY,
@@ -58,10 +65,46 @@ def init_db():
             created_at  TIMESTAMP DEFAULT NOW()
         )
     """)
+
+    # User-created databases
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_databases (
+            id         SERIAL PRIMARY KEY,
+            user_id    INT REFERENCES users(id) ON DELETE CASCADE,
+            name       TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+    # Collaborators on user databases
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_database_collaborators (
+            id          SERIAL PRIMARY KEY,
+            database_id INT REFERENCES user_databases(id) ON DELETE CASCADE,
+            user_id     INT REFERENCES users(id) ON DELETE CASCADE,
+            role        TEXT CHECK(role IN ('editor', 'viewer')) DEFAULT 'viewer',
+            invited_at  TIMESTAMP DEFAULT NOW(),
+            UNIQUE(database_id, user_id)
+        )
+    """)
+
+    # Entries in a user database (flexible columns via JSONB)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_database_entries (
+            id          SERIAL PRIMARY KEY,
+            database_id INT REFERENCES user_databases(id) ON DELETE CASCADE,
+            company_id  TEXT DEFAULT '',
+            data        JSONB DEFAULT '{}',
+            created_at  TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
     conn.commit()
     conn.close()
     print("✅ Database initialized")
 
+
+# ── Users ─────────────────────────────────────────────────────────────────────
 
 def upsert_user(google_id: str, email: str, name: str, picture: str) -> dict:
     conn = get_conn()
@@ -85,6 +128,17 @@ def upsert_user(google_id: str, email: str, name: str, picture: str) -> dict:
     finally:
         conn.close()
 
+
+def get_user_by_email(email: str) -> dict | None:
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute("SELECT * FROM users WHERE email = %s", (email,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+# ── Shared companies ──────────────────────────────────────────────────────────
 
 def upsert_company(run_id: str, data: dict) -> str:
     conn = get_conn()
@@ -140,21 +194,33 @@ def save_search(run_id, query, city, country, start_idx, end_idx, total_found):
         conn.close()
 
 
-def get_companies(query: str = None, city: str = None, country: str = None) -> list:
+def get_companies(query: str = None, city: str = None, country: str = None,
+                  queries: list = None, cities: list = None, countries: list = None) -> list:
+    """Supports both single and multi-value filters."""
     conn   = get_conn()
     c      = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     sql    = "SELECT * FROM companies WHERE 1=1"
     params = []
 
-    if city:
+    # Multi-value support
+    if cities and len(cities) > 0:
+        sql += f" AND TRIM(city) = ANY(%s)"
+        params.append(cities)
+    elif city:
         sql += " AND TRIM(city) = %s"
         params.append(city.strip())
 
-    if country:
+    if countries and len(countries) > 0:
+        sql += f" AND TRIM(country) = ANY(%s)"
+        params.append(countries)
+    elif country:
         sql += " AND TRIM(country) = %s"
         params.append(country.strip())
 
-    if query:
+    if queries and len(queries) > 0:
+        sql += f" AND TRIM(company_type) = ANY(%s)"
+        params.append(queries)
+    elif query:
         sql += " AND TRIM(company_type) = %s"
         params.append(query.strip())
 
@@ -177,10 +243,8 @@ def get_searches() -> list:
 def get_filters() -> dict:
     conn = get_conn()
     c    = conn.cursor()
-
     c.execute("SELECT DISTINCT TRIM(country) FROM companies WHERE country != '' ORDER BY 1 ASC")
     countries = [row[0] for row in c.fetchall()]
-
     c.execute("SELECT DISTINCT TRIM(city), TRIM(country) FROM companies WHERE city != '' ORDER BY 1 ASC")
     cities = {}
     for city, country in c.fetchall():
@@ -188,9 +252,209 @@ def get_filters() -> dict:
             cities[country] = []
         if city not in cities[country]:
             cities[country].append(city)
-
     c.execute("SELECT DISTINCT TRIM(company_type) FROM companies WHERE company_type != '' ORDER BY 1 ASC")
     company_types = [row[0] for row in c.fetchall()]
-
     conn.close()
     return {"countries": countries, "cities": cities, "company_types": company_types}
+
+
+# ── User databases ────────────────────────────────────────────────────────────
+
+def create_user_database(user_id: int, name: str) -> dict:
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        c.execute("""
+            INSERT INTO user_databases (user_id, name)
+            VALUES (%s, %s) RETURNING *
+        """, (user_id, name))
+        db = dict(c.fetchone())
+        conn.commit()
+        return db
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def get_user_databases(user_id: int) -> list:
+    """Get all databases owned by or shared with user."""
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute("""
+        SELECT ud.*, 'owner' as role
+        FROM user_databases ud
+        WHERE ud.user_id = %s
+        UNION
+        SELECT ud.*, udc.role
+        FROM user_databases ud
+        JOIN user_database_collaborators udc ON ud.id = udc.database_id
+        WHERE udc.user_id = %s
+        ORDER BY created_at DESC
+    """, (user_id, user_id))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_user_database(db_id: int, user_id: int) -> dict | None:
+    """Get a database if user has access."""
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute("""
+        SELECT ud.*, 'owner' as role FROM user_databases ud
+        WHERE ud.id = %s AND ud.user_id = %s
+        UNION
+        SELECT ud.*, udc.role FROM user_databases ud
+        JOIN user_database_collaborators udc ON ud.id = udc.database_id
+        WHERE ud.id = %s AND udc.user_id = %s
+        LIMIT 1
+    """, (db_id, user_id, db_id, user_id))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def delete_user_database(db_id: int, user_id: int) -> bool:
+    conn = get_conn()
+    c    = conn.cursor()
+    try:
+        c.execute("DELETE FROM user_databases WHERE id = %s AND user_id = %s", (db_id, user_id))
+        deleted = c.rowcount > 0
+        conn.commit()
+        return deleted
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+# ── User database entries ─────────────────────────────────────────────────────
+
+def get_db_entries(db_id: int) -> list:
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute("SELECT * FROM user_database_entries WHERE database_id = %s ORDER BY created_at ASC", (db_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def add_db_entries(db_id: int, rows: list) -> list:
+    """Add multiple rows. Each row is a dict of column:value pairs."""
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    inserted = []
+    try:
+        for row in rows:
+            company_id = row.pop("company_id", str(uuid.uuid4())[:8])
+            c.execute("""
+                INSERT INTO user_database_entries (database_id, company_id, data)
+                VALUES (%s, %s, %s) RETURNING *
+            """, (db_id, company_id, psycopg2.extras.Json(row)))
+            inserted.append(dict(c.fetchone()))
+        conn.commit()
+        return inserted
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def update_db_entry(entry_id: int, db_id: int, data: dict) -> dict | None:
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        c.execute("""
+            UPDATE user_database_entries SET data = %s
+            WHERE id = %s AND database_id = %s RETURNING *
+        """, (psycopg2.extras.Json(data), entry_id, db_id))
+        row = c.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def delete_db_entry(entry_id: int, db_id: int) -> bool:
+    conn = get_conn()
+    c    = conn.cursor()
+    try:
+        c.execute("DELETE FROM user_database_entries WHERE id = %s AND database_id = %s", (entry_id, db_id))
+        deleted = c.rowcount > 0
+        conn.commit()
+        return deleted
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+# ── Collaborators ─────────────────────────────────────────────────────────────
+
+def add_collaborator(db_id: int, owner_id: int, email: str, role: str) -> dict:
+    """Add a collaborator by email. Raises if user not found or not owner."""
+    target = get_user_by_email(email)
+    if not target:
+        raise ValueError(f"No user found with email {email}")
+    if target["id"] == owner_id:
+        raise ValueError("Cannot add yourself as collaborator")
+
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        c.execute("""
+            INSERT INTO user_database_collaborators (database_id, user_id, role)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (database_id, user_id) DO UPDATE SET role = EXCLUDED.role
+            RETURNING *
+        """, (db_id, target["id"], role))
+        collab = dict(c.fetchone())
+        conn.commit()
+        return {**collab, "name": target["name"], "email": target["email"], "picture": target.get("picture")}
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def get_collaborators(db_id: int) -> list:
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute("""
+        SELECT udc.*, u.name, u.email, u.picture
+        FROM user_database_collaborators udc
+        JOIN users u ON u.id = udc.user_id
+        WHERE udc.database_id = %s
+    """, (db_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def remove_collaborator(db_id: int, owner_id: int, target_user_id: int) -> bool:
+    # Verify owner
+    conn = get_conn()
+    c    = conn.cursor()
+    try:
+        c.execute("SELECT user_id FROM user_databases WHERE id = %s", (db_id,))
+        row = c.fetchone()
+        if not row or row[0] != owner_id:
+            raise PermissionError("Only the owner can remove collaborators")
+        c.execute("DELETE FROM user_database_collaborators WHERE database_id = %s AND user_id = %s", (db_id, target_user_id))
+        deleted = c.rowcount > 0
+        conn.commit()
+        return deleted
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()

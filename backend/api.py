@@ -1,37 +1,38 @@
 """
 ReachCT — api.py
-FastAPI backend that connects the React frontend to the scraper.
-
-Requirements:
-    pip install fastapi uvicorn python-multipart
-
-Run:
-    uvicorn api:app --reload --port 8000
+FastAPI backend — scraper + user databases + auth.
 """
 
 import os
 import sys
 import uuid
+import json
 import asyncio
+import io
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
-# ── Windows fix: Playwright needs this event loop policy ─────────────────────
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from database import init_db, save_search, upsert_company, get_companies, upsert_user
-from reachct  import scrape_google_maps, export_to_excel
-from auth     import verify_google_token, create_jwt, decode_jwt
+from database import (
+    init_db, save_search, upsert_company, get_companies,
+    upsert_user, get_user_by_email, get_filters,
+    create_user_database, get_user_databases, get_user_database,
+    delete_user_database, get_db_entries, add_db_entries,
+    update_db_entry, delete_db_entry,
+    add_collaborator, get_collaborators, remove_collaborator,
+)
+from reachct import scrape_google_maps, export_to_excel
+from auth    import verify_google_token, create_jwt, decode_jwt
 
-app = FastAPI(title="ReachCT API", version="1.0.0")
+app = FastAPI(title="ReachCT API", version="2.0.0")
 
-# ── CORS — allows React dev server to talk to this API ────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,45 +40,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── In-memory job store + queue ──────────────────────────────────────────────
+# ── Queue ─────────────────────────────────────────────────────────────────────
 import threading
 import queue as queue_module
 
-jobs: dict       = {}
-search_queue     = queue_module.Queue()
-queue_lock       = threading.Lock()
+jobs: dict   = {}
+search_queue = queue_module.Queue()
+queue_lock   = threading.Lock()
 
 
 def queue_worker():
-    """Background worker that processes search jobs one at a time. Runs forever."""
     while True:
         try:
             job_id, query, city, country, start, end = search_queue.get(timeout=300)
-            # Keep as queued until thread actually starts scraping
             jobs[job_id]["status"]         = "starting"
             jobs[job_id]["queue_position"] = 0
-
-            # Update queue positions for waiting jobs
             waiting = [j for j in jobs.values() if j["status"] == "queued"]
             for idx, j in enumerate(waiting):
                 j["queue_position"] = idx + 1
-
-            # Run in thread and WAIT for it to finish before processing next job
             t = threading.Thread(target=run_scrape_job_thread, args=(job_id, query, city, country, start, end))
             t.start()
-            t.join()  # blocks queue worker until job is fully complete
+            t.join()
             search_queue.task_done()
         except queue_module.Empty:
-            # Keep running — just nothing in queue right now
             continue
         except Exception as e:
             print(f"❌ Queue worker error: {e}")
             continue
 
-
-# Start the queue worker thread once at startup — never dies
 _worker_thread = threading.Thread(target=queue_worker, daemon=True)
 _worker_thread.start()
+
+
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+def get_current_user(authorization: str = None) -> dict:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = decode_jwt(authorization[7:])
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return payload
+
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 @app.on_event("startup")
@@ -86,257 +89,362 @@ def startup():
     print("✅ ReachCT API ready")
 
 
-# ── Health check ──────────────────────────────────────────────────────────────
+# ── Health ────────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 def health():
     return {"status": "ok", "time": datetime.now().isoformat()}
 
 
-# ── Start a scrape job ────────────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────────────────
+class GoogleAuthRequest(BaseModel):
+    credential: str
+
+@app.post("/api/auth/google")
+def auth_google(body: GoogleAuthRequest):
+    try:
+        info = verify_google_token(body.credential)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+    user  = upsert_user(info["sub"], info.get("email",""), info.get("name",""), info.get("picture",""))
+    token = create_jwt(user["id"], info.get("email",""), info.get("name",""), info.get("picture",""))
+    return {"token": token, "user": {"id": user["id"], "email": info.get("email",""), "name": info.get("name",""), "picture": info.get("picture","")}}
+
+@app.get("/api/auth/me")
+def auth_me(authorization: str = Header(default=None)):
+    payload = get_current_user(authorization)
+    return {"id": payload["sub"], "email": payload["email"], "name": payload["name"], "picture": payload["picture"]}
+
+
+# ── Scrape ────────────────────────────────────────────────────────────────────
 @app.get("/api/scrape")
-async def start_scrape(
-    query:   str,
-    city:    str,
-    country: str,
-    start:   int = 0,
-    end:     int = 25,
-):
-    """
-    Kicks off a scrape job in the background and returns a job_id.
-    The frontend polls /api/job/{job_id} to check progress.
-    """
-    # Clean inputs
+async def start_scrape(query: str, city: str, country: str, start: int = 0, end: int = 25):
     query   = query.strip()
     city    = city.strip().title()
     country = country.strip().title()
-
     if not query or not city or not country:
         raise HTTPException(status_code=400, detail="query, city and country are required")
-
     if end <= start:
         raise HTTPException(status_code=400, detail="end must be greater than start")
-
     if (end - start) > 50:
         raise HTTPException(status_code=400, detail="Maximum 50 listings per search.")
 
     job_id = str(uuid.uuid4())[:8]
-
-    # Use lock to prevent race condition when two users search simultaneously
     with queue_lock:
-        queued_or_running = sum(
-            1 for j in jobs.values()
-            if j["status"] in ("running", "queued")
-        )
-        queue_position = queued_or_running  # 0 = runs immediately
-
+        queued_or_running = sum(1 for j in jobs.values() if j["status"] in ("running", "queued"))
+        queue_position    = queued_or_running
         jobs[job_id] = {
-            "status":         "queued",  # worker sets to running when it starts
-            "queue_position": queue_position,
-            "progress":       0,
-            "total":          end - start,
-            "total_on_maps":  None,
-            "processing":     None,
-            "results":        [],
-            "error":          None,
-            "query":          query,
-            "city":           city,
-            "country":        country,
+            "status": "queued", "queue_position": queue_position,
+            "progress": 0, "total": end - start, "total_on_maps": None,
+            "processing": None, "results": [], "error": None,
+            "query": query, "city": city, "country": country,
         }
-
         search_queue.put((job_id, query, city, country, start, end))
 
     message = "Scrape started" if queue_position == 0 else f"Queued at position {queue_position}"
     return {"job_id": job_id, "message": message, "queue_position": queue_position}
 
 
-def run_scrape_job_thread(job_id: str, query: str, city: str,
-                           country: str, start: int, end: int):
-    """
-    Runs the scraper in a fresh event loop on a background thread.
-    This is required on Windows where Playwright can't share the uvicorn loop.
-    """
+def run_scrape_job_thread(job_id, query, city, country, start, end):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(
-            run_scrape_job(job_id, query, city, country, start, end)
-        )
+        loop.run_until_complete(run_scrape_job(job_id, query, city, country, start, end))
     finally:
         loop.close()
 
 
-async def run_scrape_job(job_id: str, query: str, city: str,
-                          country: str, start: int, end: int):
-    """Runs the scraper and updates the job store."""
+async def run_scrape_job(job_id, query, city, country, start, end):
     try:
-        # Now actually running — update status
         jobs[job_id]["status"] = "running"
         run_id  = job_id
         results = await scrape_google_maps(query, city, country, start, end, run_id, jobs=jobs, job_id=job_id)
-
-        # Save to DB
         for company in results:
             upsert_company(run_id, company)
-
         save_search(run_id, query, city, country, start, end, len(results))
-
-        if jobs[job_id].get("status") == "cancelling":
-            jobs[job_id]["status"]  = "cancelled"
-        else:
-            jobs[job_id]["status"]  = "done"
+        jobs[job_id]["status"]  = "cancelled" if jobs[job_id].get("status") == "cancelling" else "done"
         jobs[job_id]["results"] = results
-
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["error"]  = str(e)
         print(f"❌ Job {job_id} failed: {e}")
 
 
-# ── Cancel a job ─────────────────────────────────────────────────────────────
 @app.post("/api/job/{job_id}/cancel")
 def cancel_job(job_id: str):
-    """Marks a job as cancelled — scraper checks this flag between listings."""
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job["status"] == "running" or job["status"] == "queued":
+    if job["status"] in ("running", "queued"):
         job["status"] = "cancelling"
         return {"message": "Cancellation requested"}
     return {"message": f"Job already {job['status']}"}
 
 
-# ── Poll job status ───────────────────────────────────────────────────────────
 @app.get("/api/job/{job_id}")
 def get_job(job_id: str):
-    """
-    Returns current status of a scrape job.
-    Frontend polls this every 3s until status == 'done' or 'error'.
-    """
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
 
-# ── Export Excel ──────────────────────────────────────────────────────────────
-@app.get("/api/export")
-def export(
-    query:   str = "",
-    city:    str = "",
-    country: str = "",
-):
-    query   = query.strip()
-    city    = city.strip().title()
-    country = country.strip().title()
-    """
-    Exports companies from the DB to Excel and returns the file for download.
-    Filters by city and country if provided.
-    """
-    data = get_companies(city=city, country=country)
+# ── Companies / filters / export ──────────────────────────────────────────────
+class MultiFilterRequest(BaseModel):
+    queries:   List[str] = []
+    cities:    List[str] = []
+    countries: List[str] = []
 
-    if not data:
-        raise HTTPException(status_code=404, detail="No companies found for this location")
-
-    filename = export_to_excel(data, query or "export", city, country)
-
-    if not filename or not os.path.exists(filename):
-        raise HTTPException(status_code=500, detail="Failed to generate Excel file")
-
-    return FileResponse(
-        path=filename,
-        filename=os.path.basename(filename),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+@app.post("/api/companies/multi")
+def get_companies_multi(body: MultiFilterRequest):
+    """Multi-value filter — for user dashboard pull panel."""
+    data = get_companies(
+        queries=body.queries,
+        cities=body.cities,
+        countries=body.countries,
     )
+    return {"companies": data, "total": len(data)}
 
-
-# ── Get all companies from DB ─────────────────────────────────────────────────
 @app.get("/api/companies")
 def get_all_companies(city: Optional[str] = None, country: Optional[str] = None, query: Optional[str] = None):
-    """Returns all companies stored in the database."""
     if city:    city    = city.strip().title()
     if country: country = country.strip().title()
     if query:   query   = query.strip()
     data = get_companies(query=query, city=city, country=country)
     return {"companies": data, "total": len(data)}
 
-
-# ── Get unique filter values from DB ─────────────────────────────────────────
 @app.get("/api/filters")
 def get_filters_endpoint():
-    """Returns all unique countries, cities and company types stored in the DB."""
-    from database import get_filters
     return get_filters()
 
+@app.get("/api/export")
+def export(query: str = "", city: str = "", country: str = ""):
+    data = get_companies(city=city.strip().title(), country=country.strip().title())
+    if not data:
+        raise HTTPException(status_code=404, detail="No companies found")
+    filename = export_to_excel(data, query or "export", city, country)
+    if not filename or not os.path.exists(filename):
+        raise HTTPException(status_code=500, detail="Failed to generate Excel file")
+    return FileResponse(path=filename, filename=os.path.basename(filename),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ── Admin endpoints ──────────────────────────────────────────────────────────
-@app.get("/api/admin/jobs")
-def admin_get_jobs():
-    """Returns all jobs with their full status — for admin panel."""
-    return {
-        "jobs": [
-            {"id": job_id, **job}
-            for job_id, job in jobs.items()
-        ]
-    }
-
-
-@app.post("/api/admin/cancel-all")
-def admin_cancel_all():
-    """Cancels all running or queued jobs."""
-    cancelled = []
-    for job_id, job in jobs.items():
-        if job["status"] in ("running", "queued", "starting"):
-            job["status"] = "cancelling"
-            cancelled.append(job_id)
-    return {"cancelled": cancelled, "count": len(cancelled)}
-
-
-# ── Get search history ────────────────────────────────────────────────────────
 @app.get("/api/searches")
-def get_searches():
-    """Returns all past searches."""
+def get_searches_endpoint():
     from database import get_searches
     return {"searches": get_searches()}
 
 
-# ── Auth ─────────────────────────────────────────────────────────────────────
-class GoogleAuthRequest(BaseModel):
-    credential: str
+# ── User Databases ────────────────────────────────────────────────────────────
+class CreateDBRequest(BaseModel):
+    name: str
+
+@app.post("/api/databases")
+def create_db(body: CreateDBRequest, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    db   = create_user_database(int(user["sub"]), body.name.strip())
+    return db
+
+@app.get("/api/databases")
+def list_dbs(authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    return get_user_databases(int(user["sub"]))
+
+@app.delete("/api/databases/{db_id}")
+def delete_db(db_id: int, authorization: str = Header(default=None)):
+    user    = get_current_user(authorization)
+    deleted = delete_user_database(db_id, int(user["sub"]))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Database not found or not owner")
+    return {"deleted": True}
 
 
-@app.post("/api/auth/google")
-def auth_google(body: GoogleAuthRequest):
-    """Exchange a Google ID token for a ReachCT JWT."""
+# ── Database entries ──────────────────────────────────────────────────────────
+@app.get("/api/databases/{db_id}/entries")
+def get_entries(db_id: int, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    db   = get_user_database(db_id, int(user["sub"]))
+    if not db:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return get_db_entries(db_id)
+
+class AddEntriesRequest(BaseModel):
+    rows: List[dict]
+
+@app.post("/api/databases/{db_id}/entries")
+def add_entries(db_id: int, body: AddEntriesRequest, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    db   = get_user_database(db_id, int(user["sub"]))
+    if not db:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if db.get("role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot add entries")
+    return add_db_entries(db_id, body.rows)
+
+class UpdateEntryRequest(BaseModel):
+    data: dict
+
+@app.patch("/api/databases/{db_id}/entries/{entry_id}")
+def update_entry(db_id: int, entry_id: int, body: UpdateEntryRequest, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    db   = get_user_database(db_id, int(user["sub"]))
+    if not db:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if db.get("role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot edit entries")
+    row = update_db_entry(entry_id, db_id, body.data)
+    if not row:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return row
+
+@app.delete("/api/databases/{db_id}/entries/{entry_id}")
+def delete_entry(db_id: int, entry_id: int, authorization: str = Header(default=None)):
+    user    = get_current_user(authorization)
+    db      = get_user_database(db_id, int(user["sub"]))
+    if not db:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if db.get("role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot delete entries")
+    deleted = delete_db_entry(entry_id, db_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return {"deleted": True}
+
+
+# ── Upload Excel/CSV to user database ────────────────────────────────────────
+@app.post("/api/databases/{db_id}/upload")
+async def upload_file(db_id: int, file: UploadFile = File(...), authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    db   = get_user_database(db_id, int(user["sub"]))
+    if not db:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if db.get("role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot upload")
+
     try:
-        info = verify_google_token(body.credential)
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid Google token")
+        import pandas as pd
+        contents = await file.read()
+        buf      = io.BytesIO(contents)
 
-    google_id = info["sub"]
-    email     = info.get("email", "")
-    name      = info.get("name", "")
-    picture   = info.get("picture", "")
+        if file.filename.endswith(".csv"):
+            df = pd.read_csv(buf, dtype=str)
+        else:
+            df = pd.read_excel(buf, dtype=str)
 
-    user  = upsert_user(google_id, email, name, picture)
-    token = create_jwt(user["id"], email, name, picture)
+        # Standardise column names
+        COLUMN_MAP = {
+            "company name": "name", "company": "name", "nombre": "name",
+            "email address": "email", "e-mail": "email", "mail": "email",
+            "phone number": "phone", "telephone": "phone", "tel": "phone",
+            "website": "website", "url": "website", "web": "website",
+            "city": "city", "ciudad": "city", "ville": "city",
+            "country": "country", "pais": "country", "pays": "country",
+            "company type": "company_type", "type": "company_type", "sector": "company_type",
+        }
+        df.columns = [COLUMN_MAP.get(col.lower().strip(), col.lower().strip()) for col in df.columns]
+        df = df.fillna("")
 
-    return {
-        "token": token,
-        "user":  {"id": user["id"], "email": email, "name": name, "picture": picture},
-    }
+        rows      = df.to_dict(orient="records")
+        entries   = add_db_entries(db_id, rows)
+
+        # Also add to shared companies table if has enough info
+        for row in rows:
+            if row.get("name"):
+                upsert_company("upload", {
+                    "name":         row.get("name", ""),
+                    "email":        row.get("email", ""),
+                    "phone":        row.get("phone", ""),
+                    "website":      row.get("website", ""),
+                    "city":         row.get("city", ""),
+                    "country":      row.get("country", ""),
+                    "company_type": row.get("company_type", ""),
+                    "maps_url":     "",
+                })
+
+        return {"inserted": len(entries), "columns": list(df.columns)}
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Upload failed: {str(e)}")
 
 
-@app.get("/api/auth/me")
-def auth_me(authorization: str = Header(default=None)):
-    """Return the current user from a Bearer JWT."""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    payload = decode_jwt(authorization[7:])
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    return {
-        "id":      payload["sub"],
-        "email":   payload["email"],
-        "name":    payload["name"],
-        "picture": payload["picture"],
-    }
+# ── Pull from shared DB into user database ────────────────────────────────────
+class PullToDBRequest(BaseModel):
+    queries:   List[str] = []
+    cities:    List[str] = []
+    countries: List[str] = []
+
+@app.post("/api/databases/{db_id}/pull")
+def pull_to_db(db_id: int, body: PullToDBRequest, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    db   = get_user_database(db_id, int(user["sub"]))
+    if not db:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if db.get("role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot pull data")
+
+    companies = get_companies(queries=body.queries, cities=body.cities, countries=body.countries)
+    if not companies:
+        return {"inserted": 0, "message": "No companies found matching filters"}
+
+    rows = [{
+        "company_id":   str(c.get("id", "")),
+        "name":         c.get("name", ""),
+        "email":        c.get("email", ""),
+        "phone":        c.get("phone", ""),
+        "website":      c.get("website", ""),
+        "city":         c.get("city", ""),
+        "country":      c.get("country", ""),
+        "company_type": c.get("company_type", ""),
+    } for c in companies]
+
+    entries = add_db_entries(db_id, rows)
+    return {"inserted": len(entries), "columns": ["name","email","phone","website","city","country","company_type"]}
+
+
+# ── Collaborators ─────────────────────────────────────────────────────────────
+class AddCollaboratorRequest(BaseModel):
+    email: str
+    role:  str = "viewer"
+
+@app.post("/api/databases/{db_id}/collaborators")
+def add_collab(db_id: int, body: AddCollaboratorRequest, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    try:
+        result = add_collaborator(db_id, int(user["sub"]), body.email, body.role)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+@app.get("/api/databases/{db_id}/collaborators")
+def list_collabs(db_id: int, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    db   = get_user_database(db_id, int(user["sub"]))
+    if not db:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return get_collaborators(db_id)
+
+@app.delete("/api/databases/{db_id}/collaborators/{target_user_id}")
+def remove_collab(db_id: int, target_user_id: int, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    try:
+        deleted = remove_collaborator(db_id, int(user["sub"]), target_user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Collaborator not found")
+        return {"deleted": True}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+# ── Admin ─────────────────────────────────────────────────────────────────────
+@app.get("/api/admin/jobs")
+def admin_get_jobs():
+    return {"jobs": [{"id": jid, **job} for jid, job in jobs.items()]}
+
+@app.post("/api/admin/cancel-all")
+def admin_cancel_all():
+    cancelled = []
+    for jid, job in jobs.items():
+        if job["status"] in ("running", "queued", "starting"):
+            job["status"] = "cancelling"
+            cancelled.append(jid)
+    return {"cancelled": cancelled, "count": len(cancelled)}

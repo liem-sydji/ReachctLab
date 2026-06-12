@@ -1,12 +1,9 @@
 import { useNavigate } from "react-router-dom";
 import { ReachCTLogo, ArrowLeftIcon } from "./icons.jsx";
-import { useAuth } from "../context/AuthContext.jsx";
 
 // ─── INNER PAGE HEADER ────────────────────────────────────────────────────────
 export function InnerHeader({ title }) {
-  const navigate      = useNavigate();
-  const { user, logout } = useAuth();
-
+  const navigate = useNavigate();
   return (
     <header className="inner-header">
       <button className="back-btn" onClick={() => navigate("/")}><ArrowLeftIcon /> Back</button>
@@ -16,18 +13,6 @@ export function InnerHeader({ title }) {
       </div>
       <div className="inner-header-divider" />
       <span className="inner-header-title">{title}</span>
-
-      <div className="header-user">
-        {user ? (
-          <>
-            {user.picture && <img className="header-user-avatar" src={user.picture} alt="" referrerPolicy="no-referrer" />}
-            <span className="header-user-name">{user.name || user.email}</span>
-            <button className="header-logout-btn" onClick={logout}>Sign out</button>
-          </>
-        ) : (
-          <button className="header-signin-link" onClick={() => navigate("/login")}>Sign in</button>
-        )}
-      </div>
     </header>
   );
 }
