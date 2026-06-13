@@ -569,3 +569,82 @@ def delete_campaign_record(campaign_id: int, user_id: int) -> bool:
         return deleted
     finally:
         conn.close()
+
+
+# ── Email Templates ───────────────────────────────────────────────────────────
+
+def init_templates_table():
+    conn = get_conn()
+    c    = conn.cursor()
+    try:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS email_templates (
+                id         SERIAL PRIMARY KEY,
+                user_id    INT REFERENCES users(id) ON DELETE CASCADE,
+                name       TEXT NOT NULL,
+                subject    TEXT DEFAULT '',
+                body       TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"⚠️  init_templates_table: {e}")
+    finally:
+        conn.close()
+
+
+def create_template(user_id: int, name: str, subject: str, body: str) -> dict:
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        c.execute("""
+            INSERT INTO email_templates (user_id, name, subject, body)
+            VALUES (%s, %s, %s, %s) RETURNING *
+        """, (user_id, name, subject, body))
+        row = dict(c.fetchone())
+        conn.commit()
+        return row
+    except Exception as e:
+        conn.rollback(); raise e
+    finally:
+        conn.close()
+
+
+def get_user_templates(user_id: int) -> list:
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute("SELECT * FROM email_templates WHERE user_id = %s ORDER BY created_at DESC", (user_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_template(template_id: int, user_id: int, name: str, subject: str, body: str) -> dict | None:
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        c.execute("""
+            UPDATE email_templates SET name=%s, subject=%s, body=%s
+            WHERE id=%s AND user_id=%s RETURNING *
+        """, (name, subject, body, template_id, user_id))
+        row = c.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    except Exception as e:
+        conn.rollback(); raise e
+    finally:
+        conn.close()
+
+
+def delete_template(template_id: int, user_id: int) -> bool:
+    conn = get_conn()
+    c    = conn.cursor()
+    try:
+        c.execute("DELETE FROM email_templates WHERE id=%s AND user_id=%s", (template_id, user_id))
+        deleted = c.rowcount > 0
+        conn.commit()
+        return deleted
+    finally:
+        conn.close()

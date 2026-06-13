@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 import { API } from "../styles.js";
@@ -114,6 +114,208 @@ function ConnectCard({ onConnected }) {
   );
 }
 
+// ─── Quill Rich Editor ───────────────────────────────────────────────────────
+function RichEditor({ value, onChange, height=280 }) {
+  const containerRef = useRef(null);
+  const quillRef     = useRef(null);
+  const onChangeRef  = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    if (quillRef.current) return;
+    import("quill").then(({ default: Quill }) => {
+      if (!document.getElementById("quill-css")) {
+        const link = document.createElement("link");
+        link.id = "quill-css"; link.rel = "stylesheet";
+        link.href = "https://cdnjs.cloudflare.com/ajax/libs/quill/1.3.7/quill.snow.min.css";
+        document.head.appendChild(link);
+      }
+      quillRef.current = new Quill(containerRef.current, {
+        theme:"snow",
+        modules:{ toolbar:[
+          [{header:[1,2,3,false]}],
+          ["bold","italic","underline","strike"],
+          [{color:[]},{background:[]}],
+          [{list:"ordered"},{list:"bullet"}],
+          [{align:[]}],
+          ["link","image"],
+          ["clean"],
+        ]},
+        placeholder:"Write your email here, paste content, or use ReachAI below…",
+      });
+      if (value) quillRef.current.root.innerHTML = value;
+      quillRef.current.on("text-change", () => {
+        onChangeRef.current(quillRef.current.root.innerHTML);
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (quillRef.current && value !== quillRef.current.root.innerHTML) {
+      const sel = quillRef.current.getSelection();
+      quillRef.current.root.innerHTML = value || "";
+      if (sel) quillRef.current.setSelection(sel);
+    }
+  }, [value]);
+
+  return (
+    <div style={{ border:"1.5px solid #e8e8e8", borderRadius:10, overflow:"hidden" }}>
+      <div ref={containerRef} style={{ height, fontFamily:"'DM Sans',sans-serif", fontSize:14 }} />
+    </div>
+  );
+}
+
+// ─── Step 2 — Write Email ─────────────────────────────────────────────────────
+function Step2Email({ name, subject, setSubject, body, setBody, selectedCount, token, onBack, onNext, onSkip, error }) {
+  const [templates,      setTemplates]      = useState([]);
+  const [showTemplates,  setShowTemplates]  = useState(false);
+  const [aiInput,        setAiInput]        = useState("");
+  const [aiLoading,      setAiLoading]      = useState(false);
+  const [aiMessages,     setAiMessages]     = useState([]);
+
+  useEffect(() => {
+    fetch(`${API}/api/templates`, { headers:{Authorization:`Bearer ${token}`} })
+      .then(r=>r.json()).then(d=>setTemplates(Array.isArray(d)?d:[])).catch(()=>{});
+  }, []);
+
+  const importTemplate = (t) => {
+    setSubject(t.subject||"");
+    setBody(t.body||"");
+    setShowTemplates(false);
+  };
+
+  const handleAiSend = async () => {
+    if (!aiInput.trim() || aiLoading) return;
+    const instruction = aiInput.trim();
+    setAiInput(""); setAiLoading(true);
+    setAiMessages(prev => [...prev, { role:"user", text:instruction }]);
+    try {
+      const res  = await fetch(`${API}/api/campaigns/enhance`, {
+        method:"POST",
+        headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
+        body:JSON.stringify({ current_body:body, instruction, subject }),
+      });
+      const data = await res.json();
+      // Append AI output to current body
+      const appended = (body||"") + (body ? "<br><br>" : "") + data.body;
+      setBody(appended);
+      setAiMessages(prev => [...prev, { role:"ai", text:"✅ Added to your email — review and edit as needed." }]);
+    } catch {
+      setAiMessages(prev => [...prev, { role:"ai", text:"❌ Failed to generate — please try again." }]);
+    }
+    setAiLoading(false);
+  };
+
+  return (
+    <>
+      <h2 style={{ fontFamily:"'Syne',sans-serif", fontSize:20, fontWeight:800,
+        color:"#111", margin:"0 0 4px" }}>Write Your Email</h2>
+      <p style={{ fontSize:13, color:"#999", marginBottom:16 }}>
+        Sending to <strong>{selectedCount}</strong> contacts.
+      </p>
+
+      {/* Import template */}
+      <div style={{ position:"relative", marginBottom:16 }}>
+        <button onClick={()=>setShowTemplates(!showTemplates)} style={{
+          background:"none", border:"1px solid #e8e8e8", borderRadius:8,
+          padding:"7px 14px", fontSize:12, cursor:"pointer",
+          fontFamily:"'DM Sans',sans-serif", color:"#666",
+          display:"flex", alignItems:"center", gap:6 }}>
+          📝 Import Template {templates.length > 0 ? `(${templates.length})` : ""} ▾
+        </button>
+        {showTemplates && (
+          <div style={{ position:"absolute", top:"100%", left:0, zIndex:100,
+            background:"#fff", border:"1px solid #eee", borderRadius:10,
+            boxShadow:"0 8px 24px rgba(0,0,0,0.1)", minWidth:280, marginTop:4,
+            maxHeight:200, overflowY:"auto" }}>
+            {templates.length === 0 ? (
+              <div style={{ padding:"16px 20px", fontSize:13, color:"#999" }}>
+                No templates yet — create some in Email Templates
+              </div>
+            ) : templates.map(t => (
+              <div key={t.id} onClick={()=>importTemplate(t)} style={{
+                padding:"10px 16px", cursor:"pointer", borderBottom:"1px solid #f5f5f5",
+                transition:"background 0.1s" }}
+                onMouseEnter={e=>e.currentTarget.style.background="#f9f9f9"}
+                onMouseLeave={e=>e.currentTarget.style.background="#fff"}>
+                <div style={{ fontSize:13, fontWeight:600, color:"#111" }}>{t.name}</div>
+                {t.subject && <div style={{ fontSize:11, color:"#999" }}>{t.subject}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Subject */}
+      <div style={{ marginBottom:14 }}>
+        <label style={labelStyle}>Subject Line</label>
+        <input value={subject} onChange={e=>setSubject(e.target.value)}
+          placeholder="e.g. Oportunidad de prácticas para {{company}}"
+          style={inputStyle} />
+      </div>
+
+      {/* Rich editor */}
+      <div style={{ marginBottom:16 }}>
+        <label style={labelStyle}>Email Body</label>
+        <RichEditor value={body} onChange={setBody} height={260} />
+      </div>
+
+      {/* ReachAI mini chat */}
+      <div style={{ border:"1px solid #eee", borderRadius:12, overflow:"hidden", marginBottom:16 }}>
+        <div style={{ background:"linear-gradient(135deg,rgba(232,0,90,0.06),rgba(232,0,90,0.02))",
+          padding:"10px 16px", borderBottom:"1px solid #eee",
+          display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ fontSize:14 }}>✦</span>
+          <span style={{ fontSize:13, fontWeight:600, color:"#E8005A", fontFamily:"'Syne',sans-serif" }}>
+            ReachAI</span>
+          <span style={{ fontSize:12, color:"#999" }}>— Ask to write, enhance, or translate your email</span>
+        </div>
+        {aiMessages.length > 0 && (
+          <div style={{ maxHeight:120, overflowY:"auto", padding:"10px 16px",
+            background:"#fafafa", borderBottom:"1px solid #eee" }}>
+            {aiMessages.map((m, i) => (
+              <div key={i} style={{ fontSize:12, color: m.role==="user" ? "#666" : "#111",
+                marginBottom:4, fontFamily:"'DM Sans',sans-serif" }}>
+                <strong>{m.role==="user"?"You":"ReachAI"}:</strong> {m.text}
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display:"flex", gap:8, padding:"10px 12px", background:"#fff" }}>
+          <input value={aiInput} onChange={e=>setAiInput(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&handleAiSend()}
+            placeholder='e.g. "Write in Spanish, warm tone" or "Add a student profile section"'
+            style={{ flex:1, padding:"8px 12px", border:"1px solid #eee", borderRadius:8,
+              fontSize:13, fontFamily:"'DM Sans',sans-serif", outline:"none", color:"#111" }}
+            onFocus={e=>e.target.style.borderColor="#E8005A"}
+            onBlur={e=>e.target.style.borderColor="#eee"} />
+          <button onClick={handleAiSend} disabled={!aiInput.trim()||aiLoading} style={{
+            background:"#E8005A", border:"none", borderRadius:8, padding:"8px 14px",
+            color:"#fff", fontSize:12, fontWeight:600, cursor:"pointer",
+            fontFamily:"'DM Sans',sans-serif", opacity:aiInput.trim()?1:0.5 }}>
+            {aiLoading?"…":"Send"}
+          </button>
+        </div>
+      </div>
+
+      {error && <div style={{ fontSize:13, color:"#E8005A", marginBottom:12 }}>{error}</div>}
+
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10 }}>
+        <button onClick={onBack} style={cancelBtnStyle}>← Back</button>
+        <div style={{ display:"flex", gap:10 }}>
+          <button onClick={onSkip} style={{ ...cancelBtnStyle, color:"#E8005A", borderColor:"rgba(232,0,90,0.3)" }}>
+            Skip → Send to Mailrelay
+          </button>
+          <button onClick={onNext} disabled={!subject}
+            style={{ ...primaryBtnStyle, opacity:subject?1:0.5 }}>
+            Next → Review
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── Create Campaign Wizard ───────────────────────────────────────────────────
 function CreateCampaignModal({ onClose, onCreate, token }) {
   const [step, setStep]             = useState(1);
@@ -132,7 +334,22 @@ function CreateCampaignModal({ onClose, onCreate, token }) {
 
   useEffect(() => {
     fetch(`${API}/api/databases`, { headers:{Authorization:`Bearer ${token}`} })
-      .then(r=>r.json()).then(d=>setDatabases(Array.isArray(d)?d:[])).catch(()=>{});
+      .then(r=>r.json())
+      .then(async (dbs) => {
+        if (!Array.isArray(dbs)) return;
+        // Fetch entry counts for each database
+        const withCounts = await Promise.all(dbs.map(async db => {
+          try {
+            const res     = await fetch(`${API}/api/databases/${db.id}/entries`, { headers:{Authorization:`Bearer ${token}`} });
+            const entries = await res.json();
+            const real    = Array.isArray(entries) ? entries.filter(e =>
+              Object.values(e.data||{}).some(v=>v&&String(v).trim())
+            ) : [];
+            return { ...db, rowCount: real.length };
+          } catch { return { ...db, rowCount: 0 }; }
+        }));
+        setDatabases(withCounts);
+      }).catch(()=>{});
   }, []);
 
   const loadEntries = async (dbId) => {
@@ -155,8 +372,8 @@ function CreateCampaignModal({ onClose, onCreate, token }) {
   });
 
   const selectedContacts = entries
-    .filter(e => selectedEmails.has(e.id))
-    .map(e => ({ name: e.data?.name||"", email: e.data?.email||"", company: e.data?.name||"" }));
+    .filter(e => selectedEmails.has(e.id) && e.data?.email?.includes("@"))
+    .map(e => ({ name: e.data?.name||"", email: e.data?.email||"" }));
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -176,6 +393,30 @@ function CreateCampaignModal({ onClose, onCreate, token }) {
       setBody(data.body||"");
     } catch { setError("Failed to generate email content"); }
     setGenerating(false);
+  };
+
+  const handleSkipToMailrelay = async () => {
+    // Create group + empty campaign draft, skip email writing in app
+    setLoading(true); setError("");
+    try {
+      const res = await fetch(`${API}/api/campaigns`, {
+        method:"POST",
+        headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
+        body:JSON.stringify({
+          name, subject: subject || `Campaign: ${name}`,
+          body: body || "<p>Email to be written in Mailrelay.</p>",
+          contacts: selectedContacts,
+          sender_email: "noreply@spain-internship.com",
+          sender_name:  "Spain Internship",
+        }),
+      });
+      if (!res.ok) { const e=await res.json(); throw new Error(e.detail||"Failed"); }
+      const data = await res.json();
+      onCreate(data);
+      window.open("https://app.mailrelay.com/campaigns", "_blank");
+      onClose();
+    } catch(e) { setError(e.message); }
+    setLoading(false);
   };
 
   const handleCreate = async () => {
@@ -250,7 +491,7 @@ function CreateCampaignModal({ onClose, onCreate, token }) {
                     transition:"all 0.15s",
                   }}>
                     <div style={{ fontWeight:600, color:"#111", fontSize:14 }}>{db.name}</div>
-                    <div style={{ fontSize:12, color:"#999", marginTop:2 }}>{db.rows||0} rows</div>
+                    <div style={{ fontSize:12, color:"#999", marginTop:2 }}>{db.rowCount||0} rows</div>
                   </div>
                 ))}
               </div>
@@ -304,45 +545,18 @@ function CreateCampaignModal({ onClose, onCreate, token }) {
           </>
         )}
 
-        {/* Step 2 — Email content */}
+        {/* Step 2 — Write Email */}
         {step===2 && (
-          <>
-            <h2 style={{ fontFamily:"'Syne',sans-serif", fontSize:20, fontWeight:800,
-              color:"#111", margin:"0 0 8px" }}>Write Your Email</h2>
-            <p style={{ fontSize:13, color:"#999", marginBottom:20 }}>
-              Sending to <strong>{selectedEmails.size}</strong> contacts.
-              Use <code style={{ background:"#f5f5f5", padding:"1px 5px", borderRadius:4 }}>{"{{name}}"}</code> and <code style={{ background:"#f5f5f5", padding:"1px 5px", borderRadius:4 }}>{"{{company}}"}</code> as merge tags.
-            </p>
-            <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:16 }}>
-              <button onClick={handleGenerate} disabled={generating} style={{
-                background:"linear-gradient(135deg,#E8005A,#ff6b9d)", border:"none",
-                borderRadius:8, padding:"8px 16px", color:"#fff", fontSize:13,
-                fontWeight:600, cursor:"pointer", fontFamily:"'DM Sans',sans-serif",
-                display:"flex", alignItems:"center", gap:6,
-              }}>
-                {generating ? "Generating…" : "✦ Generate with AI"}
-              </button>
-            </div>
-            <div style={{ marginBottom:14 }}>
-              <label style={labelStyle}>Subject Line</label>
-              <input value={subject} onChange={e=>setSubject(e.target.value)}
-                placeholder="e.g. Partnership opportunity for {{company}}"
-                style={inputStyle} />
-            </div>
-            <div>
-              <label style={labelStyle}>Email Body (HTML supported)</label>
-              <textarea value={body} onChange={e=>setBody(e.target.value)}
-                placeholder="Write your email here… or use Generate with AI above"
-                rows={10} style={{ ...inputStyle, resize:"vertical", lineHeight:1.5 }} />
-            </div>
-            {error && <div style={{ fontSize:13, color:"#E8005A", marginTop:8 }}>{error}</div>}
-            <div style={{ display:"flex", justifyContent:"space-between", gap:10, marginTop:24 }}>
-              <button onClick={()=>setStep(1)} style={cancelBtnStyle}>← Back</button>
-              <button onClick={()=>setStep(3)} disabled={!subject||!body}
-                style={{ ...primaryBtnStyle, opacity:subject&&body?1:0.5 }}>
-                Next → Review</button>
-            </div>
-          </>
+          <Step2Email
+            name={name} subject={subject} setSubject={setSubject}
+            body={body} setBody={setBody}
+            selectedCount={selectedEmails.size}
+            token={token}
+            onBack={()=>setStep(1)}
+            onNext={()=>setStep(3)}
+            onSkip={handleSkipToMailrelay}
+            error={error}
+          />
         )}
 
         {/* Step 3 — Sender + confirm */}
@@ -454,7 +668,7 @@ export default function MailCampaignsPage() {
 
   if (loading) return (
     <div style={{ display:"flex", minHeight:"100vh", background:"#0a0a0a" }}>
-      <LeftPanel user={user} activePage="campaigns" onNav={p=>p==="/"?navigate("/"):p==="databases"?navigate("/dashboard"):null}/>
+      <LeftPanel user={user} activePage="campaigns" onNav={p=>p==="/"?navigate("/"):p==="databases"?navigate("/dashboard"):p==="templates"?navigate("/templates"):null}/>
       <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center" }}>
         <div style={{ width:32, height:32, borderRadius:"50%", border:"3px solid #333",
           borderTopColor:"#E8005A", animation:"spin 0.8s linear infinite" }} />
@@ -465,7 +679,7 @@ export default function MailCampaignsPage() {
   return (
     <div style={{ display:"flex", minHeight:"100vh", background:"#0a0a0a" }}>
       <LeftPanel user={user} activePage="campaigns"
-        onNav={p=>p==="/"?navigate("/"):p==="databases"?navigate("/dashboard"):null} />
+        onNav={p=>p==="/"?navigate("/"):p==="databases"?navigate("/dashboard"):p==="templates"?navigate("/templates"):null} />
 
       <main style={{ flex:1, padding:"36px 40px", overflowY:"auto" }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:24 }}>

@@ -45,11 +45,18 @@ function LeftPanel({ user, onNav }) {
           <button onClick={()=>onNav("campaigns")} style={{ display:"flex", alignItems:"center", gap:8,
             background:"none", border:"1px solid transparent", borderRadius:8,
             padding:"8px 12px", cursor:"pointer", color:"#888", fontSize:12, fontWeight:400,
-            fontFamily:"'DM Sans',sans-serif", width:"100%", textAlign:"left",
-            transition:"all 0.15s" }}
+            fontFamily:"'DM Sans',sans-serif", width:"100%", textAlign:"left", transition:"all 0.15s" }}
             onMouseEnter={e=>{ e.currentTarget.style.color="#fff"; e.currentTarget.style.background="rgba(255,255,255,0.05)"; }}
             onMouseLeave={e=>{ e.currentTarget.style.color="#888"; e.currentTarget.style.background="none"; }}>
             📧 Mail Campaigns
+          </button>
+          <button onClick={()=>onNav("templates")} style={{ display:"flex", alignItems:"center", gap:8,
+            background:"none", border:"1px solid transparent", borderRadius:8,
+            padding:"8px 12px", cursor:"pointer", color:"#888", fontSize:12, fontWeight:400,
+            fontFamily:"'DM Sans',sans-serif", width:"100%", textAlign:"left", transition:"all 0.15s" }}
+            onMouseEnter={e=>{ e.currentTarget.style.color="#fff"; e.currentTarget.style.background="rgba(255,255,255,0.05)"; }}
+            onMouseLeave={e=>{ e.currentTarget.style.color="#888"; e.currentTarget.style.background="none"; }}>
+            📝 Email Templates
           </button>
         </div>
       </div>
@@ -108,6 +115,7 @@ export default function DashboardPage() {
   const handleNav = (p) => {
     if (p === "/") navigate("/");
     else if (p === "campaigns") navigate("/campaigns");
+    else if (p === "templates") navigate("/templates");
   };
 
   const fetchDatabases = async () => {

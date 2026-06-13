@@ -47,10 +47,8 @@ def add_subscribers(api_key: str, group_id: int, contacts: list) -> dict:
     for contact in contacts:
         try:
             mailrelay_request(api_key, "POST", "/api/v1/subscribers", {
-                "email":         contact.get("email", ""),
-                "name":          contact.get("name", ""),
+                "email":          contact.get("email", ""),
                 "email_list_ids": [group_id],
-                "status":        "active",
             })
             results["success"] += 1
         except Exception as e:

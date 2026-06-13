@@ -636,6 +636,10 @@ export default function SpreadsheetPage() {
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({});
   const [modal, setModal]     = useState(null);
+
+  // isViewer must be declared before useEffects that reference it
+  const isViewer = db?.role === "viewer";
+
   // ── Excel-style cell selection + copy/paste ──
   const [selection, setSelection]         = useState(null); // {startRow, startCol, endRow, endCol}
   const [isSelecting, setIsSelecting]     = useState(false);
@@ -768,8 +772,6 @@ export default function SpreadsheetPage() {
     rows.forEach(r => Object.keys(r.data||{}).forEach(k => { if(!seen.has(k)){ seen.add(k); cols.push(k); } }));
     return cols;
   };
-
-  const isViewer = db?.role === "viewer";
 
   // ── Cell edit — uses entry ID not row index ──
   const handleCellChange = useCallback(async (entryId, col, val) => {

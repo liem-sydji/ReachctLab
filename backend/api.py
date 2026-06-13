@@ -857,3 +857,81 @@ Return ONLY the JSON, no explanation."""}]
         return {"subject": result.get("subject",""), "body": result.get("body","")}
     except:
         raise HTTPException(status_code=500, detail="Failed to generate campaign content")
+
+
+# ── Email Templates ───────────────────────────────────────────────────────────
+from database import (create_template, get_user_templates,
+                      update_template, delete_template, init_templates_table)
+
+try:
+    init_templates_table()
+except Exception as e:
+    print(f"⚠️  Template table init: {e}")
+
+
+class TemplateRequest(BaseModel):
+    name:    str
+    subject: str = ""
+    body:    str = ""
+
+@app.post("/api/templates")
+def create_email_template(body: TemplateRequest, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    return create_template(int(user["sub"]), body.name, body.subject, body.body)
+
+@app.get("/api/templates")
+def list_templates(authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    return get_user_templates(int(user["sub"]))
+
+@app.patch("/api/templates/{template_id}")
+def update_email_template(template_id: int, body: TemplateRequest, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    t    = update_template(template_id, int(user["sub"]), body.name, body.subject, body.body)
+    if not t: raise HTTPException(status_code=404, detail="Template not found")
+    return t
+
+@app.delete("/api/templates/{template_id}")
+def delete_email_template(template_id: int, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    if not delete_template(template_id, int(user["sub"])):
+        raise HTTPException(status_code=404, detail="Template not found")
+    return {"deleted": True}
+
+
+# ── ReachAI email enhancement ─────────────────────────────────────────────────
+class EnhanceEmailRequest(BaseModel):
+    current_body: str
+    instruction:  str
+    subject:      str = ""
+
+@app.post("/api/campaigns/enhance")
+def enhance_email(body: EnhanceEmailRequest, authorization: str = Header(default=None)):
+    """Claude enhances/appends to the current email body based on user instruction."""
+    import anthropic
+    get_current_user(authorization)
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
+
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1500,
+        messages=[{"role":"user","content":f"""You are an email writing assistant for a B2B internship placement company.
+
+Current email body:
+{body.current_body or "(empty)"}
+
+Subject: {body.subject or "(none)"}
+
+User instruction: {body.instruction}
+
+Task: Follow the user's instruction exactly. You may:
+- Write a complete new email if the body is empty
+- Enhance, translate, reformat, or add to the existing email
+- Add a section, signature, or specific content
+
+Return ONLY the updated/new email body as clean HTML. No explanation. No markdown fences.
+Preserve any existing content unless told to replace it.
+Add your contribution clearly separated if appending."""}]
+    )
+
+    return {"body": message.content[0].text.strip()}
