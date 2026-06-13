@@ -8,7 +8,7 @@ import requests
 
 def mailrelay_request(api_key: str, method: str, endpoint: str, data: dict = None) -> dict:
     """Make a request to the Mailrelay API."""
-    base_url = "https://api.ipzmarketing.com"  # Mailrelay API base
+    base_url = "https://spain-internship.ipzmarketing.com"  # Mailrelay account URL
     url      = f"{base_url}{endpoint}"
     headers  = {
         "X-AUTH-TOKEN": api_key,
@@ -21,17 +21,21 @@ def mailrelay_request(api_key: str, method: str, endpoint: str, data: dict = Non
 
 
 def validate_api_key(api_key: str) -> bool:
-    """Check if an API key is valid by fetching account info."""
+    """Check if an API key is valid by fetching subscriber groups."""
     try:
-        mailrelay_request(api_key, "GET", "/api/v2/email_lists")
+        mailrelay_request(api_key, "GET", "/api/v1/groups")
         return True
     except:
-        return False
+        try:
+            mailrelay_request(api_key, "GET", "/api/v1/subscribers")
+            return True
+        except:
+            return False
 
 
 def create_group(api_key: str, name: str) -> dict:
     """Create a subscriber group in Mailrelay."""
-    return mailrelay_request(api_key, "POST", "/api/v2/email_lists", {"name": name})
+    return mailrelay_request(api_key, "POST", "/api/v1/groups", {"name": name})
 
 
 def add_subscribers(api_key: str, group_id: int, contacts: list) -> dict:
@@ -42,7 +46,7 @@ def add_subscribers(api_key: str, group_id: int, contacts: list) -> dict:
     results = {"success": 0, "failed": 0, "errors": []}
     for contact in contacts:
         try:
-            mailrelay_request(api_key, "POST", "/api/v2/subscribers", {
+            mailrelay_request(api_key, "POST", "/api/v1/subscribers", {
                 "email":         contact.get("email", ""),
                 "name":          contact.get("name", ""),
                 "email_list_ids": [group_id],
@@ -58,7 +62,7 @@ def add_subscribers(api_key: str, group_id: int, contacts: list) -> dict:
 def create_campaign(api_key: str, name: str, subject: str, body: str,
                     group_id: int, sender_email: str, sender_name: str) -> dict:
     """Create a campaign draft in Mailrelay."""
-    return mailrelay_request(api_key, "POST", "/api/v2/campaigns", {
+    return mailrelay_request(api_key, "POST", "/api/v1/campaigns", {
         "name":          name,
         "subject":       subject,
         "html_body":     body,
@@ -72,6 +76,6 @@ def create_campaign(api_key: str, name: str, subject: str, body: str,
 def list_campaigns(api_key: str) -> list:
     """List all campaigns in Mailrelay."""
     try:
-        return mailrelay_request(api_key, "GET", "/api/v2/campaigns")
+        return mailrelay_request(api_key, "GET", "/api/v1/campaigns")
     except:
         return []
