@@ -23,31 +23,51 @@ def run_async(coro):
 
 
 def tool_list_databases(user_id: int) -> dict:
-    """List all databases the user has access to."""
+    """List all databases the user has access to, with column info."""
     dbs = get_user_databases(user_id)
     result = []
     for db in dbs:
         entries = get_db_entries(db["id"])
+        # Derive columns
+        seen = set()
+        cols = []
+        for e in entries:
+            for k in (e.get("data") or {}).keys():
+                if k not in seen:
+                    seen.add(k)
+                    cols.append(k)
+        real_count = len([e for e in entries if any(v and str(v).strip() for v in (e.get("data") or {}).values())])
         result.append({
-            "id":    db["id"],
-            "name":  db["name"],
-            "role":  db["role"],
-            "rows":  len(entries),
+            "id":      db["id"],
+            "name":    db["name"],
+            "role":    db["role"],
+            "rows":    real_count,
+            "columns": cols,
         })
     return {"databases": result, "total": len(result)}
 
 
 def tool_get_database_contents(user_id: int, db_id: int) -> dict:
-    """Get entries from a specific database."""
+    """Get entries and column structure from a specific database."""
     db = get_user_database(db_id, user_id)
     if not db:
         return {"error": f"Database {db_id} not found or access denied"}
     entries = get_db_entries(db_id)
+    # Derive columns from all entries
+    seen = set()
+    cols = []
+    for e in entries:
+        for k in (e.get("data") or {}).keys():
+            if k not in seen:
+                seen.add(k)
+                cols.append(k)
+    real_entries = [e for e in entries if any(v and str(v).strip() for v in (e.get("data") or {}).values())]
     return {
         "database_name": db["name"],
-        "total":         len(entries),
-        "entries":       [e.get("data", {}) for e in entries[:50]],  # cap at 50 for context
-        "truncated":     len(entries) > 50,
+        "columns":       cols,
+        "total":         len(real_entries),
+        "entries":       [e.get("data", {}) for e in real_entries[:20]],
+        "truncated":     len(real_entries) > 20,
     }
 
 
@@ -78,14 +98,19 @@ def tool_pull_from_database(queries: list, cities: list, countries: list) -> dic
     }
 
 
+# Fields to strip before saving to user database
+STRIP_FIELDS = {"run_id", "maps_url", "id", "created_at", "company_id"}
+
 def tool_save_to_database(user_id: int, db_id: int, rows: list) -> dict:
-    """Save rows to a user database."""
+    """Save rows to a user database — strips internal fields like run_id, maps_url."""
     db = get_user_database(db_id, user_id)
     if not db:
         return {"error": f"Database {db_id} not found or access denied"}
     if db.get("role") == "viewer":
         return {"error": "You are a viewer and cannot add entries to this database"}
-    entries = add_db_entries(db_id, rows)
+    # Strip internal/irrelevant fields
+    clean_rows = [{k: v for k, v in row.items() if k not in STRIP_FIELDS} for row in rows]
+    entries = add_db_entries(db_id, clean_rows)
     return {"inserted": len(entries), "database": db["name"]}
 
 

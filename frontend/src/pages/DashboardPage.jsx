@@ -35,12 +35,23 @@ function LeftPanel({ user, onNav }) {
               textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:120 }}>{user?.email}</div>
           </div>
         </div>
-        <button onClick={()=>onNav("databases")} style={{ display:"flex", alignItems:"center", gap:8,
-          background:"rgba(232,0,90,0.12)", border:"1px solid rgba(232,0,90,0.2)", borderRadius:8,
-          padding:"8px 12px", cursor:"pointer", color:"#E8005A", fontSize:12, fontWeight:600,
-          fontFamily:"'DM Sans',sans-serif", width:"100%", textAlign:"left" }}>
-          🗄️ Databases
-        </button>
+        <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+          <button onClick={()=>onNav("databases")} style={{ display:"flex", alignItems:"center", gap:8,
+            background:"rgba(232,0,90,0.12)", border:"1px solid rgba(232,0,90,0.2)", borderRadius:8,
+            padding:"8px 12px", cursor:"pointer", color:"#E8005A", fontSize:12, fontWeight:600,
+            fontFamily:"'DM Sans',sans-serif", width:"100%", textAlign:"left" }}>
+            🗄️ Databases
+          </button>
+          <button onClick={()=>onNav("campaigns")} style={{ display:"flex", alignItems:"center", gap:8,
+            background:"none", border:"1px solid transparent", borderRadius:8,
+            padding:"8px 12px", cursor:"pointer", color:"#888", fontSize:12, fontWeight:400,
+            fontFamily:"'DM Sans',sans-serif", width:"100%", textAlign:"left",
+            transition:"all 0.15s" }}
+            onMouseEnter={e=>{ e.currentTarget.style.color="#fff"; e.currentTarget.style.background="rgba(255,255,255,0.05)"; }}
+            onMouseLeave={e=>{ e.currentTarget.style.color="#888"; e.currentTarget.style.background="none"; }}>
+            📧 Mail Campaigns
+          </button>
+        </div>
       </div>
     </aside>
   );
@@ -94,6 +105,11 @@ export default function DashboardPage() {
     fetchDatabases();
   }, [token]);
 
+  const handleNav = (p) => {
+    if (p === "/") navigate("/");
+    else if (p === "campaigns") navigate("/campaigns");
+  };
+
   const fetchDatabases = async () => {
     try {
       const res  = await fetch(`${API}/api/databases`, { headers:{Authorization:`Bearer ${token}`} });
@@ -126,7 +142,7 @@ export default function DashboardPage() {
 
   return (
     <div style={{ display:"flex", minHeight:"100vh", background:"#0a0a0a" }}>
-      <LeftPanel user={user} onNav={(p)=>p==="/"?navigate("/"):null} />
+      <LeftPanel user={user} onNav={handleNav} />
 
       <main style={{ flex:1, padding:"36px 40px", overflowY:"auto" }}>
         {/* Header */}

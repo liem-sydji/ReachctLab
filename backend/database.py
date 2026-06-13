@@ -479,3 +479,93 @@ def rename_column_in_db(db_id: int, old_name: str, new_name: str) -> int:
         raise e
     finally:
         conn.close()
+
+
+# ── Mailrelay / Campaigns ─────────────────────────────────────────────────────
+
+def init_campaigns_tables():
+    """Create mailrelay_key column and campaigns table if not exists."""
+    conn = get_conn()
+    c    = conn.cursor()
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS mailrelay_api_key TEXT DEFAULT ''")
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS campaigns (
+                id              SERIAL PRIMARY KEY,
+                user_id         INT REFERENCES users(id) ON DELETE CASCADE,
+                name            TEXT NOT NULL,
+                subject         TEXT DEFAULT '',
+                body            TEXT DEFAULT '',
+                mailrelay_group_id    INT,
+                mailrelay_campaign_id INT,
+                contact_count   INT DEFAULT 0,
+                status          TEXT DEFAULT 'draft',
+                created_at      TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"⚠️  init_campaigns_tables: {e}")
+    finally:
+        conn.close()
+
+
+def save_mailrelay_key(user_id: int, api_key: str):
+    conn = get_conn()
+    c    = conn.cursor()
+    try:
+        c.execute("UPDATE users SET mailrelay_api_key = %s WHERE id = %s", (api_key, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_mailrelay_key(user_id: int) -> str:
+    conn = get_conn()
+    c    = conn.cursor()
+    c.execute("SELECT mailrelay_api_key FROM users WHERE id = %s", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return (row[0] or "") if row else ""
+
+
+def create_campaign_record(user_id: int, name: str, subject: str, body: str,
+                            group_id: int, campaign_id: int, contact_count: int) -> dict:
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        c.execute("""
+            INSERT INTO campaigns (user_id, name, subject, body, mailrelay_group_id,
+                                   mailrelay_campaign_id, contact_count, status)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,'draft') RETURNING *
+        """, (user_id, name, subject, body, group_id, campaign_id, contact_count))
+        row = dict(c.fetchone())
+        conn.commit()
+        return row
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def get_user_campaigns(user_id: int) -> list:
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute("SELECT * FROM campaigns WHERE user_id = %s ORDER BY created_at DESC", (user_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_campaign_record(campaign_id: int, user_id: int) -> bool:
+    conn = get_conn()
+    c    = conn.cursor()
+    try:
+        c.execute("DELETE FROM campaigns WHERE id = %s AND user_id = %s", (campaign_id, user_id))
+        deleted = c.rowcount > 0
+        conn.commit()
+        return deleted
+    finally:
+        conn.close()

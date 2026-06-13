@@ -80,7 +80,7 @@ function TagInput({ placeholder, options, value, onChange }) {
           maxHeight:200, overflowY:"auto", marginTop:4 }}>
           {filtered.map(o => (
             <div key={o} onMouseDown={() => add(o)} style={{ padding:"9px 14px", fontSize:13,
-              cursor:"pointer", fontFamily:"'DM Sans',sans-serif" }}
+              cursor:"pointer", fontFamily:"'DM Sans',sans-serif", color:"#111", background:"#fff" }}
               onMouseEnter={e => e.target.style.background="#f9f9f9"}
               onMouseLeave={e => e.target.style.background="#fff"}>{o}</div>
           ))}
@@ -420,7 +420,7 @@ function ThreeDotsMenu({ onPull, onUpload, onSearch, onShare, onExport, onCopy }
 const EMPTY_ROWS = 50;
 const COL_WIDTH  = 180;
 
-function SpreadsheetGrid({ entries, columns, setColumns, onCellChange, onDeleteRow, onDeleteCol, onAddCol, onRenameCol, isViewer, selectedRowIds = new Set(), onToggleRow }) {
+function SpreadsheetGrid({ entries, columns, setColumns, onCellChange, onDeleteRow, onDeleteCol, onAddCol, onRenameCol, isViewer, isCellSelected, onCellMouseDown, onCellMouseEnter }) {
   const [editCell, setEditCell]   = useState(null); // {entryId, col} — uses entry ID not row index
   const [editVal,  setEditVal]    = useState("");
   const [editColHeader, setEditColHeader] = useState(null); // col name being renamed
@@ -551,16 +551,13 @@ function SpreadsheetGrid({ entries, columns, setColumns, onCellChange, onDeleteR
             <tr key={entry.id} style={{ borderBottom:"1px solid #f0f0f0" }}
               onMouseEnter={e=>e.currentTarget.style.background="#fafafa"}
               onMouseLeave={e=>e.currentTarget.style.background="none"}>
-              <td style={{ background: selectedRowIds.has(entry.id) ? "rgba(232,0,90,0.06)" : "#f8f8f8",
+              <td style={{ background: "#f8f8f8",
                 borderRight:"1px solid #e8e8e8", color:"#bbb",
                 fontSize:11, textAlign:"center", padding:"0 4px", position:"sticky", left:0,
                 height:36, verticalAlign:"middle", cursor:"pointer" }}
-                onClick={()=>onToggleRow && onToggleRow(entry.id)}>
+                onClick={()=>{}}>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"0 4px" }}>
-                  {selectedRowIds.has(entry.id)
-                    ? <span style={{ color:"#E8005A", fontSize:13 }}>✓</span>
-                    : <span>{rowIdx+1}</span>
-                  }
+                  <span>{rowIdx+1}</span>
                   {!isViewer && (
                     <button onClick={e=>{e.stopPropagation();onDeleteRow(entry.id);}} style={{ background:"none", border:"none",
                       color:"#ddd", cursor:"pointer", fontSize:14, padding:0, lineHeight:1, opacity:0 }}
@@ -575,9 +572,12 @@ function SpreadsheetGrid({ entries, columns, setColumns, onCellChange, onDeleteR
                 const val       = entry.data?.[col] || "";
                 return (
                   <td key={col} style={{ padding:0, borderRight:"1px solid #f0f0f0",
-                    background: isEditing ? "#fff9fb" : "transparent",
-                    outline: isEditing ? "2px solid #E8005A" : "none",
-                    cursor: isViewer ? "default" : "text", height:36, verticalAlign:"middle" }}
+                    background: isEditing ? "#fff9fb" : isCellSelected && isCellSelected(rowIdx, columns.indexOf(col)) ? "rgba(232,0,90,0.08)" : "transparent",
+                    outline: isEditing ? "2px solid #E8005A" : isCellSelected && isCellSelected(rowIdx, columns.indexOf(col)) ? "1px solid rgba(232,0,90,0.3)" : "none",
+                    cursor: isViewer ? "default" : "text", height:36, verticalAlign:"middle",
+                    userSelect:"none" }}
+                    onMouseDown={(e)=>{ onCellMouseDown && onCellMouseDown(entry.id, col, e); }}
+                    onMouseEnter={()=>{ onCellMouseEnter && onCellMouseEnter(entry.id, col); }}
                     onClick={()=>handleCellClick(entry.id, col, val)}>
                     {isEditing ? (
                       <input autoFocus value={editVal} onChange={e=>setEditVal(e.target.value)}
@@ -636,58 +636,103 @@ export default function SpreadsheetPage() {
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({});
   const [modal, setModal]     = useState(null);
-  const [selectedRows, setSelectedRows] = useState(new Set());
-  const [copiedRows,   setCopiedRows]   = useState([]);
+  // ── Excel-style cell selection + copy/paste ──
+  const [selection, setSelection]         = useState(null); // {startRow, startCol, endRow, endCol}
+  const [isSelecting, setIsSelecting]     = useState(false);
+  const [copiedCells, setCopiedCells]     = useState(null); // {data[][], cols[], startCol}
+  const selectionRef = useRef(null);
 
-  const toggleSelectRow = (entryId) => {
-    setSelectedRows(prev => {
-      const next = new Set(prev);
-      if (next.has(entryId)) next.delete(entryId); else next.add(entryId);
-      return next;
-    });
+  const getCellCoords = (entryId, col) => {
+    const rowIdx = entries.findIndex(e => e.id === entryId);
+    const colIdx = columns.indexOf(col);
+    return { rowIdx, colIdx };
   };
 
-  const handleCopyRows = () => {
-    const rows = entries.filter(e => selectedRows.has(e.id));
-    if (!rows.length) return;
-    setCopiedRows(rows.map(e => e.data || {}));
-    const tsv = [columns, ...rows.map(e => columns.map(c => e.data?.[c]||""))].map(r => r.join("\t")).join("\n");
-    navigator.clipboard.writeText(tsv).catch(()=>{});
+  const isCellSelected = (rowIdx, colIdx) => {
+    if (!selection) return false;
+    const minR = Math.min(selection.startRow, selection.endRow);
+    const maxR = Math.max(selection.startRow, selection.endRow);
+    const minC = Math.min(selection.startCol, selection.endCol);
+    const maxC = Math.max(selection.startCol, selection.endCol);
+    return rowIdx >= minR && rowIdx <= maxR && colIdx >= minC && colIdx <= maxC;
   };
 
-  const handlePasteRows = async () => {
-    if (copiedRows.length > 0) {
-      const res = await fetch(`${API}/api/databases/${dbId}/entries`, {
-        method:"POST",
-        headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
-        body:JSON.stringify({rows: copiedRows}),
-      });
-      if (res.ok) fetchAll();
-      return;
-    }
-    try {
-      const text = await navigator.clipboard.readText();
-      const lines = text.trim().split("\n").filter(l=>l.trim());
-      if (!lines.length) return;
-      const firstLine  = lines[0].split("\t");
-      const hasHeader  = firstLine.some(cell => columns.includes(cell.toLowerCase().trim()));
-      const dataLines  = hasHeader ? lines.slice(1) : lines;
-      const headerLine = hasHeader ? firstLine.map(h=>h.toLowerCase().trim()) : columns;
-      const rows = dataLines.map(line => {
-        const cells = line.split("\t");
-        const row   = {};
-        headerLine.forEach((h, i) => { if (cells[i]!==undefined) row[h] = cells[i]; });
-        return row;
-      });
-      if (!rows.length) return;
-      const res = await fetch(`${API}/api/databases/${dbId}/entries`, {
-        method:"POST",
-        headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
-        body:JSON.stringify({rows}),
-      });
-      if (res.ok) { setColumns(prev=>[...new Set([...prev, ...Object.keys(rows[0])])]); fetchAll(); }
-    } catch {}
+  const handleCellMouseDown = (entryId, col, e) => {
+    if (e.button !== 0) return;
+    const { rowIdx, colIdx } = getCellCoords(entryId, col);
+    setSelection({ startRow:rowIdx, startCol:colIdx, endRow:rowIdx, endCol:colIdx });
+    setIsSelecting(true);
+    selectionRef.current = { startRow:rowIdx, startCol:colIdx };
   };
+
+  const handleCellMouseEnter = (entryId, col) => {
+    if (!isSelecting) return;
+    const { rowIdx, colIdx } = getCellCoords(entryId, col);
+    setSelection(prev => prev ? { ...prev, endRow:rowIdx, endCol:colIdx } : null);
+  };
+
+  const handleMouseUp = () => setIsSelecting(false);
+
+  useEffect(() => {
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => window.removeEventListener("mouseup", handleMouseUp);
+  }, []);
+
+  // Ctrl+C — copy selected cells
+  useEffect(() => {
+    const handleKeyDown = async (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "c" && selection) {
+        const minR = Math.min(selection.startRow, selection.endRow);
+        const maxR = Math.max(selection.startRow, selection.endRow);
+        const minC = Math.min(selection.startCol, selection.endCol);
+        const maxC = Math.max(selection.startCol, selection.endCol);
+        const selectedCols = columns.slice(minC, maxC+1);
+        const data = entries.slice(minR, maxR+1).map(entry =>
+          selectedCols.map(col => entry.data?.[col] || "")
+        );
+        setCopiedCells({ data, cols: selectedCols, startCol: minC });
+        const tsv = data.map(r => r.join("\t")).join("\n");
+        await navigator.clipboard.writeText(tsv).catch(()=>{});
+      }
+      // Ctrl+V — paste
+      if ((e.ctrlKey || e.metaKey) && e.key === "v" && selection && !isViewer) {
+        try {
+          const text = await navigator.clipboard.readText();
+          const lines = text.trim().split("\n").filter(l => l.trim());
+          if (!lines.length) return;
+          const pasteRows = lines.map(l => l.split("\t"));
+          const startRow  = Math.min(selection.startRow, selection.endRow);
+          const startCol  = Math.min(selection.startCol, selection.endCol);
+          // Apply paste to existing entries
+          const updates = [];
+          for (let ri = 0; ri < pasteRows.length; ri++) {
+            const entryIdx = startRow + ri;
+            if (entryIdx >= entries.length) break;
+            const entry   = entries[entryIdx];
+            const newData = { ...(entry.data || {}) };
+            for (let ci = 0; ci < pasteRows[ri].length; ci++) {
+              const colIdx = startCol + ci;
+              if (colIdx < columns.length) {
+                newData[columns[colIdx]] = pasteRows[ri][ci];
+              }
+            }
+            updates.push({ id: entry.id, data: newData });
+          }
+          // Save all updates
+          await Promise.all(updates.map(u =>
+            fetch(`${API}/api/databases/${dbId}/entries/${u.id}`, {
+              method:"PATCH",
+              headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
+              body:JSON.stringify({data: u.data}),
+            })
+          ));
+          fetchAll();
+        } catch {}
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selection, entries, columns, dbId, token, isViewer]);
 
   useEffect(() => {
     if (!token) { navigate("/login"); return; }
@@ -706,8 +751,13 @@ export default function SpreadsheetPage() {
       const rows = await entriesRes.json();
       setDb((Array.isArray(dbs)?dbs:[]).find(d=>String(d.id)===String(dbId))||null);
       const safeRows = Array.isArray(rows)?rows:[];
-      setEntries(safeRows);
-      setColumns(deriveColumns(safeRows));
+      // Filter out ghost rows (entries where all data values are empty)
+      const realRows = safeRows.filter(r => {
+        const data = r.data || {};
+        return Object.values(data).some(v => v && String(v).trim() !== "");
+      });
+      setEntries(realRows);
+      setColumns(deriveColumns(realRows));
     } catch {}
     setLoading(false);
   };
@@ -826,9 +876,23 @@ export default function SpreadsheetPage() {
     fetchAll();
   };
 
-  // ── Export Excel ──
-  const handleExport = () => {
-    window.open(`${API}/api/databases/${dbId}/export?token=${token}`, "_blank");
+  // ── Export Excel — fetch with auth then trigger download ──
+  const handleExport = async () => {
+    try {
+      const res = await fetch(`${API}/api/databases/${dbId}/export`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) { alert("Export failed"); return; }
+      const blob     = await res.blob();
+      const url      = URL.createObjectURL(blob);
+      const a        = document.createElement("a");
+      a.href         = url;
+      a.download     = `${db?.name || "database"}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch { alert("Export failed"); }
   };
 
   // ── Copy table ──
@@ -867,28 +931,10 @@ export default function SpreadsheetPage() {
           <h1 style={{ fontFamily:"'Syne',sans-serif", fontSize:15, fontWeight:700,
             color:"#111", margin:0, flex:1 }}>{db?.name||"Database"}</h1>
           <span style={{ fontSize:12, color:"#bbb" }}>{entries.length} rows</span>
-          {!isViewer && selectedRows.size > 0 && (
-            <div style={{ display:"flex", gap:6 }}>
-              <button onClick={handleCopyRows} style={{ background:"none", border:"1px solid #e8e8e8",
-                borderRadius:8, padding:"6px 12px", fontSize:12, cursor:"pointer",
-                fontFamily:"'DM Sans',sans-serif", color:"#444" }}>
-                Copy {selectedRows.size} row{selectedRows.size>1?"s":""}
-              </button>
-            </div>
-          )}
-          {!isViewer && copiedRows.length > 0 && (
-            <button onClick={handlePasteRows} style={{ background:"none", border:"1px solid #E8005A",
-              borderRadius:8, padding:"6px 12px", fontSize:12, cursor:"pointer",
-              fontFamily:"'DM Sans',sans-serif", color:"#E8005A" }}>
-              Paste {copiedRows.length} row{copiedRows.length>1?"s":""}
-            </button>
-          )}
-          {!isViewer && (
-            <button onClick={handlePasteRows} title="Paste from clipboard (Ctrl+V)" style={{
-              background:"none", border:"1px solid #e8e8e8", borderRadius:8, padding:"6px 12px",
-              fontSize:12, cursor:"pointer", fontFamily:"'DM Sans',sans-serif", color:"#666" }}>
-              Paste from clipboard
-            </button>
+          {selection && (
+            <span style={{ fontSize:11, color:"#bbb", fontFamily:"'DM Sans',sans-serif" }}>
+              Ctrl+C to copy · Ctrl+V to paste
+            </span>
           )}
           {!isViewer && (
             <ThreeDotsMenu
@@ -905,7 +951,9 @@ export default function SpreadsheetPage() {
           onCellChange={handleCellChange} onDeleteRow={handleDeleteRow}
           onDeleteCol={handleDeleteCol} onAddCol={handleAddCol}
           onRenameCol={handleRenameCol} isViewer={isViewer}
-          selectedRowIds={selectedRows} onToggleRow={toggleSelectRow}
+          isCellSelected={isCellSelected}
+          onCellMouseDown={handleCellMouseDown}
+          onCellMouseEnter={handleCellMouseEnter}
         />
       </div>
 

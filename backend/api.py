@@ -609,9 +609,13 @@ Guidelines:
 - Be concise and action-oriented. When a task is done, confirm it and provide the relevant link or data.
 - For database links use: /dashboard/db/{id}
 - When the user asks you to save to a database by name, first call list_databases to find the right one. If it doesn't exist, ask the user to confirm before creating it.
+- When creating a new database for the user, suggest relevant columns based on the data (e.g. Company Name, Email, Phone, Website, City, Country, Company Type) or ask what columns they want.
+- Before saving to a database, check its existing columns using list_databases or get_database_contents and match the data structure to those columns.
 - When running a search, warn the user it takes a few minutes and report results when done.
 - You can answer questions about the data using get_database_stats or get_database_contents.
 - Keep responses short unless the user asks for detail.
+- When saving search results to a database, only save: name, email, phone, website, city, country, company_type. Never include run_id, maps_url, or other internal fields.
+- If a database is empty (0 rows), suggest what columns to add before saving data to it.
 """
 
 class ReachAIRequest(BaseModel):
@@ -706,3 +710,150 @@ async def reachai_chat(body: ReachAIRequest, authorization: str = Header(default
         messages.append({"role": "user", "content": tool_results})
 
     return {"reply": "I reached the maximum number of steps. Please try a simpler request.", "messages": messages}
+
+
+# ── Mail Campaigns ────────────────────────────────────────────────────────────
+from mailrelay import validate_api_key, create_group, add_subscribers, create_campaign
+from database  import (save_mailrelay_key, get_mailrelay_key,
+                        create_campaign_record, get_user_campaigns, delete_campaign_record,
+                        init_campaigns_tables)
+
+# Init campaign tables on startup (called after init_db)
+try:
+    init_campaigns_tables()
+except Exception as e:
+    print(f"⚠️  Campaign table init: {e}")
+
+
+class MailrelayKeyRequest(BaseModel):
+    api_key: str
+
+@app.post("/api/mailrelay/connect")
+def connect_mailrelay(body: MailrelayKeyRequest, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    if not validate_api_key(body.api_key):
+        raise HTTPException(status_code=400, detail="Invalid Mailrelay API key — please check and try again")
+    save_mailrelay_key(int(user["sub"]), body.api_key)
+    return {"connected": True}
+
+@app.get("/api/mailrelay/status")
+def mailrelay_status(authorization: str = Header(default=None)):
+    user    = get_current_user(authorization)
+    api_key = get_mailrelay_key(int(user["sub"]))
+    return {"connected": bool(api_key)}
+
+@app.delete("/api/mailrelay/disconnect")
+def disconnect_mailrelay(authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    save_mailrelay_key(int(user["sub"]), "")
+    return {"disconnected": True}
+
+
+class CreateCampaignRequest(BaseModel):
+    name:          str
+    subject:       str
+    body:          str
+    contacts:      List[dict]   # [{name, email}]
+    sender_email:  str
+    sender_name:   str
+
+@app.post("/api/campaigns")
+def create_new_campaign(body: CreateCampaignRequest, authorization: str = Header(default=None)):
+    user    = get_current_user(authorization)
+    user_id = int(user["sub"])
+    api_key = get_mailrelay_key(user_id)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="No Mailrelay account connected")
+
+    # Filter contacts with valid emails
+    valid_contacts = [c for c in body.contacts if c.get("email") and "@" in c.get("email","")]
+    if not valid_contacts:
+        raise HTTPException(status_code=400, detail="No valid email addresses in selected contacts")
+
+    try:
+        # 1. Create group in Mailrelay
+        group = create_group(api_key, f"ReachCT — {body.name}")
+        group_id = group.get("id") or group.get("data",{}).get("id")
+
+        # 2. Add subscribers
+        sub_results = add_subscribers(api_key, group_id, valid_contacts)
+
+        # 3. Create campaign draft
+        campaign = create_campaign(
+            api_key, body.name, body.subject, body.body,
+            group_id, body.sender_email, body.sender_name
+        )
+        campaign_id = campaign.get("id") or campaign.get("data",{}).get("id")
+
+        # 4. Save to ReachCT DB
+        record = create_campaign_record(
+            user_id, body.name, body.subject, body.body,
+            group_id, campaign_id, sub_results["success"]
+        )
+
+        return {
+            "campaign": record,
+            "subscribers_added": sub_results["success"],
+            "subscribers_failed": sub_results["failed"],
+            "mailrelay_campaign_id": campaign_id,
+            "mailrelay_url": "https://app.mailrelay.com/campaigns",
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Campaign creation failed: {str(e)}")
+
+
+@app.get("/api/campaigns")
+def list_campaigns_endpoint(authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    return get_user_campaigns(int(user["sub"]))
+
+@app.delete("/api/campaigns/{campaign_id}")
+def delete_campaign(campaign_id: int, authorization: str = Header(default=None)):
+    user = get_current_user(authorization)
+    if not delete_campaign_record(campaign_id, int(user["sub"])):
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return {"deleted": True}
+
+
+class GenerateCampaignRequest(BaseModel):
+    campaign_name: str
+    company_type:  str = ""
+    sample_contacts: List[dict] = []
+
+@app.post("/api/campaigns/generate")
+def generate_campaign_content(body: GenerateCampaignRequest, authorization: str = Header(default=None)):
+    """Use Claude to generate email subject and body for a campaign."""
+    import anthropic
+    user   = get_current_user(authorization)
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
+
+    sample_names = [c.get("name","") for c in body.sample_contacts[:5] if c.get("name")]
+    context      = f"Campaign: {body.campaign_name}"
+    if body.company_type:
+        context += f"\nTarget company type: {body.company_type}"
+    if sample_names:
+        context += f"\nExample companies: {', '.join(sample_names)}"
+
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=800,
+        messages=[{"role":"user","content":f"""Generate a professional B2B outreach email for the following campaign.
+
+{context}
+
+Return ONLY a JSON object with exactly two keys:
+- "subject": a compelling email subject line (max 60 chars)
+- "body": the email body in HTML format, professional and concise (150-200 words). Use {{{{name}}}} for the contact name and {{{{company}}}} for the company name as merge tags.
+
+Return ONLY the JSON, no explanation."""}]
+    )
+
+    try:
+        text = message.content[0].text.strip()
+        text = re.sub(r"```json\s*","",text)
+        text = re.sub(r"```\s*","",text)
+        result = json.loads(text)
+        return {"subject": result.get("subject",""), "body": result.get("body","")}
+    except:
+        raise HTTPException(status_code=500, detail="Failed to generate campaign content")

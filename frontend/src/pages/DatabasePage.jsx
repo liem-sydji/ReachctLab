@@ -39,7 +39,7 @@ function TagInput({ placeholder, options, value, onChange }) {
           maxHeight:200,overflowY:"auto",marginTop:4}}>
           {filtered.map(o=>(
             <div key={o} onMouseDown={()=>add(o)} style={{padding:"9px 14px",fontSize:13,
-              cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}
+              cursor:"pointer",fontFamily:"'DM Sans',sans-serif",color:"#111",background:"#fff"}}
               onMouseEnter={e=>e.target.style.background="#f9f9f9"}
               onMouseLeave={e=>e.target.style.background="#fff"}>{o}</div>
           ))}

@@ -10,7 +10,8 @@ import InfoPage       from "./pages/InfoPage.jsx";
 import AdminPage      from "./pages/AdminPage.jsx";
 import DashboardPage  from "./pages/DashboardPage.jsx";
 import SpreadsheetPage from "./pages/SpreadsheetPage.jsx";
-import ReachAIPage    from "./pages/ReachAIPage.jsx";
+import ReachAIPage        from "./pages/ReachAIPage.jsx";
+import MailCampaignsPage from "./pages/MailCampaignsPage.jsx";
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
           <Route path="/dashboard"          element={<DashboardPage />} />
           <Route path="/dashboard/db/:dbId" element={<SpreadsheetPage />} />
           <Route path="/ai"                   element={<ReachAIPage />} />
+          <Route path="/campaigns"             element={<MailCampaignsPage />} />
           <Route path="*"                   element={<Landing />} />
         </Routes>
       </AuthProvider>
