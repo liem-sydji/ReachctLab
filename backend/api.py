@@ -775,15 +775,16 @@ def create_new_campaign(body: CreateCampaignRequest, authorization: str = Header
         group = create_group(api_key, f"ReachCT — {body.name}")
         group_id = group.get("id") or group.get("data",{}).get("id")
 
-        # 2. Add subscribers
-        sub_results = add_subscribers(api_key, group_id, valid_contacts)
+        # 2. Add subscribers — pass emails only
+        emails      = [c.get("email","").strip().lower() for c in valid_contacts if c.get("email")]
+        sub_results = add_subscribers(api_key, group_id, emails)
 
         # 3. Create campaign draft
         campaign = create_campaign(
-            api_key, body.name, body.subject, body.body,
+            api_key, body.name, body.subject, body.body or "<p>Email to be written in Mailrelay.</p>",
             group_id, body.sender_email, body.sender_name
         )
-        campaign_id = campaign.get("id") or campaign.get("data",{}).get("id")
+        campaign_id = campaign.get("id") or campaign.get("data",{}).get("id") or 0
 
         # 4. Save to ReachCT DB
         record = create_campaign_record(

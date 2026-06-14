@@ -61,44 +61,49 @@ function LeftPanel({ user, activePage, onNav }) {
 function RichEditor({ value, onChange, height = 300 }) {
   const containerRef = useRef(null);
   const quillRef     = useRef(null);
+  const onChangeRef  = useRef(onChange);
+  onChangeRef.current = onChange;
 
   useEffect(() => {
     if (quillRef.current) return;
-    import("quill").then(({ default: Quill }) => {
-      // Load Quill CSS
-      if (!document.getElementById("quill-css")) {
-        const link  = document.createElement("link");
-        link.id     = "quill-css";
-        link.rel    = "stylesheet";
-        link.href   = "https://cdnjs.cloudflare.com/ajax/libs/quill/1.3.7/quill.snow.min.css";
-        document.head.appendChild(link);
-      }
 
-      quillRef.current = new Quill(containerRef.current, {
-        theme: "snow",
-        modules: {
-          toolbar: [
-            [{ header: [1,2,3,false] }],
-            ["bold","italic","underline","strike"],
-            [{ color:[] },{ background:[] }],
-            [{ list:"ordered" },{ list:"bullet" }],
-            [{ align:[] }],
-            ["link","image"],
-            ["clean"],
-          ],
-        },
-        placeholder: "Write your email here, paste content, or use ReachAI below…",
+    const initQuill = () => {
+      import("quill").then(({ default: Quill }) => {
+        if (quillRef.current) return;
+        quillRef.current = new Quill(containerRef.current, {
+          theme: "snow",
+          modules: {
+            toolbar: [
+              [{ header: [1,2,3,false] }],
+              ["bold","italic","underline","strike"],
+              [{ color:[] },{ background:[] }],
+              [{ list:"ordered" },{ list:"bullet" }],
+              [{ align:[] }],
+              ["link","image"],
+              ["clean"],
+            ],
+          },
+          placeholder: "Write your email here…",
+        });
+        if (value) quillRef.current.root.innerHTML = value;
+        quillRef.current.on("text-change", () => {
+          onChangeRef.current(quillRef.current.root.innerHTML);
+        });
       });
+    };
 
-      if (value) quillRef.current.root.innerHTML = value;
-
-      quillRef.current.on("text-change", () => {
-        onChange(quillRef.current.root.innerHTML);
-      });
-    });
+    if (!document.getElementById("quill-css")) {
+      const link = document.createElement("link");
+      link.id    = "quill-css";
+      link.rel   = "stylesheet";
+      link.href  = "https://cdnjs.cloudflare.com/ajax/libs/quill/1.3.7/quill.snow.min.css";
+      link.onload = initQuill;
+      document.head.appendChild(link);
+    } else {
+      initQuill();
+    }
   }, []);
 
-  // Update content if value changes externally (e.g. from AI append)
   useEffect(() => {
     if (quillRef.current && value !== quillRef.current.root.innerHTML) {
       quillRef.current.root.innerHTML = value || "";
@@ -106,8 +111,15 @@ function RichEditor({ value, onChange, height = 300 }) {
   }, [value]);
 
   return (
-    <div style={{ border:"1.5px solid #e8e8e8", borderRadius:10, overflow:"hidden" }}>
-      <div ref={containerRef} style={{ height, fontFamily:"'DM Sans',sans-serif", fontSize:14 }} />
+    <div style={{ border:"1.5px solid #e8e8e8", borderRadius:10, overflow:"hidden", background:"#fff" }}>
+      <div ref={containerRef} style={{ height, fontFamily:"'DM Sans',sans-serif", fontSize:14, color:"#111" }} />
+      <style>{`
+        .ql-container { font-family: 'DM Sans', sans-serif !important; color: #111 !important; }
+        .ql-editor { color: #111 !important; }
+        .ql-editor.ql-blank::before { color: #bbb !important; }
+        .ql-container.ql-snow { border: none !important; }
+        .ql-toolbar.ql-snow { border: none !important; border-bottom: 1px solid #eee !important; background: #fafafa; }
+      `}</style>
     </div>
   );
 }
