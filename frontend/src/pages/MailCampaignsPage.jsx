@@ -600,9 +600,10 @@ function Step3({ name, subject, body, groups, token, onBack, onCreate, onClose }
         headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
         body:JSON.stringify({
           name, subject,
-          body: body || "<p>Email to be written in Mailrelay.</p>",
+          body: body || "<p>Email body — edit in Mailrelay before sending.</p>",
           contacts,
           sender_id: Number(senderId),
+          groups: groups.map(g => ({ name: g.name, emails: [...g.emails] })),
         }),
       });
       if (!res.ok) { const e=await res.json(); throw new Error(e.detail||"Failed"); }

@@ -757,11 +757,16 @@ def get_mailrelay_senders(authorization: str = Header(default=None)):
     return get_senders(api_key)
 
 
+class GroupData(BaseModel):
+    name:   str
+    emails: List[str]
+
 class CreateCampaignRequest(BaseModel):
     name:      str
     subject:   str
     body:      str
-    contacts:  List[dict]
+    contacts:  List[dict]   # flat list for backward compat
+    groups:    List[GroupData] = []  # named groups from Step 1
     sender_id: int
 
 @app.post("/api/campaigns")
@@ -772,55 +777,73 @@ def create_new_campaign(body: CreateCampaignRequest, authorization: str = Header
     if not api_key:
         raise HTTPException(status_code=400, detail="No Mailrelay account connected")
 
-    # Filter contacts with valid emails
-    valid_contacts = [c for c in body.contacts if c.get("email") and "@" in c.get("email","")]
-    if not valid_contacts:
-        raise HTTPException(status_code=400, detail="No valid email addresses in selected contacts")
-
     try:
-        # 1. Create group in Mailrelay
-        group    = create_group(api_key, f"ReachCT — {body.name}")
-        print(f"🔍 Mailrelay group response: {group}")
-        # Handle nested response structures
-        if isinstance(group, dict):
-            group_id = (group.get("id") or
-                       group.get("data", {}).get("id") or
-                       group.get("group", {}).get("id"))
-        else:
-            group_id = None
-        print(f"🔍 group_id extracted: {group_id}")
+        all_group_ids    = []
+        total_subscribed = 0
+        total_failed     = 0
 
-        if not group_id:
-            raise Exception(f"Could not get group ID from Mailrelay response: {group}")
+        # Use named groups if provided, otherwise fall back to flat contacts
+        groups_to_create = body.groups if body.groups else [
+            GroupData(name=body.name, emails=[
+                c.get("email","").strip().lower()
+                for c in body.contacts
+                if c.get("email") and "@" in c.get("email","")
+            ])
+        ]
 
-        # 2. Add subscribers — pass emails only
-        emails      = [c.get("email","").strip().lower() for c in valid_contacts if c.get("email")]
-        print(f"🔍 Adding {len(emails)} emails to group_id {group_id}: {emails[:3]}...")
-        sub_results = add_subscribers(api_key, group_id, emails)
-        print(f"🔍 Subscribers result: success={sub_results['success']} failed={sub_results['failed']} errors={sub_results['errors'][:2]}")
+        if not groups_to_create or all(len(g.emails)==0 for g in groups_to_create):
+            raise HTTPException(status_code=400, detail="No valid email addresses")
 
-        # 3. Create campaign draft
+        for grp in groups_to_create:
+            valid_emails = [e.strip().lower() for e in grp.emails if e and "@" in e]
+            if not valid_emails:
+                continue
+
+            # 1. Create group with user's chosen name
+            group_resp = create_group(api_key, grp.name)
+            print(f"🔍 Group response: {group_resp}")
+            group_id = (group_resp.get("id") or
+                       group_resp.get("data",{}).get("id") or
+                       group_resp.get("group",{}).get("id"))
+
+            if not group_id:
+                print(f"⚠️ Could not get group_id for {grp.name}")
+                continue
+
+            all_group_ids.append(int(group_id))
+
+            # 2. Add subscribers to this group
+            print(f"🔍 Adding {len(valid_emails)} emails to group '{grp.name}' (id={group_id})")
+            sub_results = add_subscribers(api_key, group_id, valid_emails)
+            print(f"🔍 Result: success={sub_results['success']} failed={sub_results['failed']}")
+            total_subscribed += sub_results["success"]
+            total_failed     += sub_results["failed"]
+
+        if not all_group_ids:
+            raise Exception("No groups were created successfully")
+
+        # 3. Create campaign draft targeting all groups
+        print(f"🔍 Creating campaign with group_ids={all_group_ids} sender_id={body.sender_id}")
         campaign = create_campaign(
             api_key, body.name, body.subject,
-            body.body or "<p>Email to be written in Mailrelay.</p>",
-            group_id, body.sender_id
+            body.body or "<p>Email body — edit in Mailrelay before sending.</p>",
+            all_group_ids[0], body.sender_id
         )
         print(f"🔍 Campaign response: {campaign}")
-        campaign_id = (campaign.get("id") or
-                      campaign.get("data", {}).get("id") or 0)
+        campaign_id = campaign.get("id") or campaign.get("data",{}).get("id") or 0
 
         # 4. Save to ReachCT DB
         record = create_campaign_record(
             user_id, body.name, body.subject, body.body or "",
-            group_id, campaign_id, sub_results["success"]
+            all_group_ids[0], campaign_id, total_subscribed
         )
 
         return {
-            "campaign": record,
-            "subscribers_added": sub_results["success"],
-            "subscribers_failed": sub_results["failed"],
-            "mailrelay_campaign_id": campaign_id,
-            "mailrelay_url": "https://spain-internship.ipzmarketing.com/admin/campaigns",
+            "campaign":           record,
+            "subscribers_added":  total_subscribed,
+            "subscribers_failed": total_failed,
+            "group_ids":          all_group_ids,
+            "mailrelay_url":      "https://spain-internship.ipzmarketing.com/admin/campaigns",
         }
 
     except Exception as e:

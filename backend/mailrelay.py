@@ -47,36 +47,54 @@ def create_group(api_key: str, name: str) -> dict:
 
 def add_subscribers(api_key: str, group_id: int, emails: list) -> dict:
     """
-    Add subscribers to a Mailrelay group.
-    Tries both group_ids and email_list_ids field names.
+    Bulk import subscribers to a Mailrelay group using the imports endpoint.
+    This mirrors the UI paste import — handles new and existing subscribers.
     """
-    results = {"success": 0, "failed": 0, "errors": []}
     group_id = int(group_id)
-    for email in emails:
-        email = str(email).strip().lower()
-        if not email or "@" not in email:
-            continue
-        try:
-            # Try group_ids first (v1 API standard)
-            mailrelay_request(api_key, "POST", "/api/v1/subscribers", {
-                "email":     email,
-                "group_ids": [group_id],
-                "status":    "active",
-            })
-            results["success"] += 1
-        except Exception as e1:
+    valid    = [str(e).strip().lower() for e in emails if e and "@" in str(e)]
+    if not valid:
+        return {"success": 0, "failed": 0, "errors": ["No valid emails"]}
+    try:
+        result = mailrelay_request(api_key, "POST", "/api/v1/imports", {
+            "name":        f"ReachCT import {group_id}",
+            "subscribers": [{"email": e} for e in valid],
+            "group_ids":   [group_id],
+        })
+        print(f"🔍 Import result: {result}")
+        return {"success": len(valid), "failed": 0, "errors": []}
+    except Exception as e:
+        print(f"⚠️ Bulk import failed: {e}, trying individual adds...")
+        results = {"success": 0, "failed": 0, "errors": []}
+        for email in valid:
             try:
-                # Fallback: try email_list_ids
                 mailrelay_request(api_key, "POST", "/api/v1/subscribers", {
-                    "email":          email,
-                    "email_list_ids": [group_id],
-                    "status":         "active",
+                    "email":     email,
+                    "group_ids": [group_id],
+                    "status":    "active",
                 })
                 results["success"] += 1
             except Exception as e2:
-                results["failed"] += 1
-                results["errors"].append(f"{email}: {str(e1)} | fallback: {str(e2)}")
-    return results
+                if "already exists" in str(e2).lower():
+                    try:
+                        search = mailrelay_request(api_key, "GET",
+                            f"/api/v1/subscribers?email={email}")
+                        subs = search if isinstance(search, list) else []
+                        if subs:
+                            sub_id = subs[0].get("id")
+                            current = subs[0].get("group_ids", [])
+                            if group_id not in current:
+                                current.append(group_id)
+                            mailrelay_request(api_key, "PATCH",
+                                f"/api/v1/subscribers/{sub_id}",
+                                {"group_ids": current})
+                        results["success"] += 1
+                    except Exception as e3:
+                        results["failed"] += 1
+                        results["errors"].append(f"{email}: {str(e3)}")
+                else:
+                    results["failed"] += 1
+                    results["errors"].append(f"{email}: {str(e2)}")
+        return results
 
 
 def create_campaign(api_key: str, name: str, subject: str, body: str,
@@ -87,11 +105,13 @@ def create_campaign(api_key: str, name: str, subject: str, body: str,
     group_ids: list of integer group IDs
     target: "groups" or "segment"
     """
+    html_body = body or "<p>Email body — edit in Mailrelay before sending.</p>"
     return mailrelay_request(api_key, "POST", "/api/v1/campaigns", {
         "name":       name,
         "subject":    subject,
-        "body":       body or "<p>Email body — edit in Mailrelay before sending.</p>",
+        "html":       html_body,
         "sender_id":  int(sender_id),
+        "target":     "groups",
         "group_ids":  [int(group_id)],
     })
 
