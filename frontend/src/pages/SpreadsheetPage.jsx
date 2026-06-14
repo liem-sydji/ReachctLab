@@ -133,7 +133,7 @@ function PullModal({ onClose, onPull, filters }) {
   const [cities, setCities]       = useState([]);
   const [countries, setCountries] = useState([]);
   const [loading, setLoading]     = useState(false);
-  const allTypes    = Object.values(COMPANY_TYPES_GROUPED).flat();
+  const allTypes    = filters?.company_types || [];
   const allCountries = filters?.countries || [];
   const allCities   = filters?.cities ? Object.values(filters.cities).flat() : [];
   const handlePull = async () => { setLoading(true); await onPull({queries,cities,countries}); setLoading(false); onClose(); };

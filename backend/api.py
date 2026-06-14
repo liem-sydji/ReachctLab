@@ -713,7 +713,7 @@ async def reachai_chat(body: ReachAIRequest, authorization: str = Header(default
 
 
 # ── Mail Campaigns ────────────────────────────────────────────────────────────
-from mailrelay import validate_api_key, create_group, add_subscribers, create_campaign
+from mailrelay import validate_api_key, get_senders, create_group, add_subscribers, create_campaign
 from database  import (save_mailrelay_key, get_mailrelay_key,
                         create_campaign_record, get_user_campaigns, delete_campaign_record,
                         init_campaigns_tables)
@@ -748,14 +748,21 @@ def disconnect_mailrelay(authorization: str = Header(default=None)):
     save_mailrelay_key(int(user["sub"]), "")
     return {"disconnected": True}
 
+@app.get("/api/mailrelay/senders")
+def get_mailrelay_senders(authorization: str = Header(default=None)):
+    user    = get_current_user(authorization)
+    api_key = get_mailrelay_key(int(user["sub"]))
+    if not api_key:
+        raise HTTPException(status_code=400, detail="No Mailrelay account connected")
+    return get_senders(api_key)
+
 
 class CreateCampaignRequest(BaseModel):
-    name:          str
-    subject:       str
-    body:          str
-    contacts:      List[dict]   # [{name, email}]
-    sender_email:  str
-    sender_name:   str
+    name:      str
+    subject:   str
+    body:      str
+    contacts:  List[dict]
+    sender_id: int
 
 @app.post("/api/campaigns")
 def create_new_campaign(body: CreateCampaignRequest, authorization: str = Header(default=None)):
@@ -772,23 +779,39 @@ def create_new_campaign(body: CreateCampaignRequest, authorization: str = Header
 
     try:
         # 1. Create group in Mailrelay
-        group = create_group(api_key, f"ReachCT — {body.name}")
-        group_id = group.get("id") or group.get("data",{}).get("id")
+        group    = create_group(api_key, f"ReachCT — {body.name}")
+        print(f"🔍 Mailrelay group response: {group}")
+        # Handle nested response structures
+        if isinstance(group, dict):
+            group_id = (group.get("id") or
+                       group.get("data", {}).get("id") or
+                       group.get("group", {}).get("id"))
+        else:
+            group_id = None
+        print(f"🔍 group_id extracted: {group_id}")
+
+        if not group_id:
+            raise Exception(f"Could not get group ID from Mailrelay response: {group}")
 
         # 2. Add subscribers — pass emails only
         emails      = [c.get("email","").strip().lower() for c in valid_contacts if c.get("email")]
+        print(f"🔍 Adding {len(emails)} emails to group_id {group_id}: {emails[:3]}...")
         sub_results = add_subscribers(api_key, group_id, emails)
+        print(f"🔍 Subscribers result: success={sub_results['success']} failed={sub_results['failed']} errors={sub_results['errors'][:2]}")
 
         # 3. Create campaign draft
         campaign = create_campaign(
-            api_key, body.name, body.subject, body.body or "<p>Email to be written in Mailrelay.</p>",
-            group_id, body.sender_email, body.sender_name
+            api_key, body.name, body.subject,
+            body.body or "<p>Email to be written in Mailrelay.</p>",
+            group_id, body.sender_id
         )
-        campaign_id = campaign.get("id") or campaign.get("data",{}).get("id") or 0
+        print(f"🔍 Campaign response: {campaign}")
+        campaign_id = (campaign.get("id") or
+                      campaign.get("data", {}).get("id") or 0)
 
         # 4. Save to ReachCT DB
         record = create_campaign_record(
-            user_id, body.name, body.subject, body.body,
+            user_id, body.name, body.subject, body.body or "",
             group_id, campaign_id, sub_results["success"]
         )
 
@@ -797,7 +820,7 @@ def create_new_campaign(body: CreateCampaignRequest, authorization: str = Header
             "subscribers_added": sub_results["success"],
             "subscribers_failed": sub_results["failed"],
             "mailrelay_campaign_id": campaign_id,
-            "mailrelay_url": "https://app.mailrelay.com/campaigns",
+            "mailrelay_url": "https://spain-internship.ipzmarketing.com/admin/campaigns",
         }
 
     except Exception as e:

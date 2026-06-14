@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
-import { API, COMPANY_TYPES_GROUPED } from "../styles.js";
+import { API } from "../styles.js";
 import { DatabaseIcon, DownloadIcon, CopyIcon } from "../components/icons.jsx";
 import { InnerHeader, ResultsTable } from "../components/shared.jsx";
 import AddToDBModal from "../components/AddToDBModal.jsx";
@@ -137,7 +137,7 @@ function PullTab() {
     fetch(`${API}/api/filters`).then(r=>r.json()).then(setFilters).catch(()=>{});
   }, []);
 
-  const allTypes     = Object.values(COMPANY_TYPES_GROUPED).flat();
+  const allTypes     = filters?.company_types || [];
   const allCountries = filters?.countries||[];
   const allCities    = filters?.cities ? Object.values(filters.cities).flat() : [];
 

@@ -572,14 +572,24 @@ function Step2({ name, subject, setSubject, body, setBody, totalEmails, token, o
 
 // ─── Step 3 — Review & Send ───────────────────────────────────────────────────
 function Step3({ name, subject, body, groups, token, onBack, onCreate, onClose }) {
-  const [senderName,  setSenderName]  = useState("");
-  const [senderEmail, setSenderEmail] = useState("");
-  const [loading,     setLoading]     = useState(false);
-  const [error,       setError]       = useState("");
+  const [senders,    setSenders]    = useState([]);
+  const [senderId,   setSenderId]   = useState("");
+  const [loading,    setLoading]    = useState(false);
+  const [error,      setError]      = useState("");
   const totalEmails = groups.reduce((sum, g) => sum + g.emails.size, 0);
 
+  useEffect(() => {
+    fetch(`${API}/api/mailrelay/senders`, { headers:{Authorization:`Bearer ${token}`} })
+      .then(r=>r.json())
+      .then(data => {
+        const list = Array.isArray(data) ? data : [];
+        setSenders(list);
+        if (list.length > 0) setSenderId(list[0].id);
+      }).catch(()=>{});
+  }, []);
+
   const handleCreate = async () => {
-    if (!senderEmail.trim()) { setError("Sender email is required."); return; }
+    if (!senderId) { setError("Please select a sender."); return; }
     setLoading(true); setError("");
     try {
       const contacts = [];
@@ -589,11 +599,10 @@ function Step3({ name, subject, body, groups, token, onBack, onCreate, onClose }
         method:"POST",
         headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
         body:JSON.stringify({
-          name, subject, body: body||"<p>Email to be written in Mailrelay.</p>",
+          name, subject,
+          body: body || "<p>Email to be written in Mailrelay.</p>",
           contacts,
-          sender_email: senderEmail.trim(),
-          sender_name:  senderName.trim() || senderEmail.trim(),
-          groups: groups.map(g=>({ name:g.name, emails:[...g.emails] })),
+          sender_id: Number(senderId),
         }),
       });
       if (!res.ok) { const e=await res.json(); throw new Error(e.detail||"Failed"); }
@@ -628,31 +637,33 @@ function Step3({ name, subject, body, groups, token, onBack, onCreate, onClose }
         </div>
       </div>
 
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
-        <div>
-          <label style={labelStyle}>Sender Name</label>
-          <input value={senderName} onChange={e=>setSenderName(e.target.value)}
-            placeholder="e.g. Florian" style={inputStyle} />
-        </div>
-        <div>
-          <label style={labelStyle}>Sender Email *</label>
-          <input value={senderEmail} onChange={e=>setSenderEmail(e.target.value)}
-            placeholder="e.g. florian@spain-internship.com"
-            type="email" style={inputStyle} />
-        </div>
+      <div style={{ marginBottom:16 }}>
+        <label style={labelStyle}>Select Sender *</label>
+        {senders.length === 0 ? (
+          <div style={{ fontSize:13, color:"#999", padding:"10px 0" }}>
+            Loading senders… Make sure you have configured senders in Mailrelay → Campaigns → Senders
+          </div>
+        ) : (
+          <select value={senderId} onChange={e=>setSenderId(e.target.value)}
+            style={{ ...inputStyle, cursor:"pointer", appearance:"none" }}>
+            {senders.map(s=>(
+              <option key={s.id} value={s.id}>{s.name} — {s.email}</option>
+            ))}
+          </select>
+        )}
       </div>
 
       <div style={{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:10,
         padding:"12px 16px", fontSize:13, color:"#166534", marginBottom:16 }}>
-        ℹ️ After creating, go to <strong>app.mailrelay.com</strong> to review and send.
+        ℹ️ After creating, go to <strong>spain-internship.ipzmarketing.com</strong> to review and send.
       </div>
 
       {error && <div style={{ fontSize:13, color:"#E8005A", marginBottom:12 }}>{error}</div>}
 
       <div style={{ display:"flex", justifyContent:"space-between" }}>
         <button onClick={onBack} style={cancelBtnStyle}>← Back</button>
-        <button onClick={handleCreate} disabled={!senderEmail||loading}
-          style={{ ...primaryBtnStyle, opacity:senderEmail?1:0.5 }}>
+        <button onClick={handleCreate} disabled={!senderId||loading}
+          style={{ ...primaryBtnStyle, opacity:senderId?1:0.5 }}>
           {loading?"Creating…":"Create Campaign in Mailrelay"}
         </button>
       </div>
@@ -670,28 +681,9 @@ function CreateCampaignModal({ onClose, onCreate, token }) {
 
   const totalEmails = groups.reduce((sum, g) => sum + g.emails.size, 0);
 
-  const handleSkip = async () => {
-    // Create groups + empty campaign, open Mailrelay
-    const contacts = [];
-    groups.forEach(g => g.emails.forEach(email => contacts.push({ email })));
-    try {
-      const res = await fetch(`${API}/api/campaigns`, {
-        method:"POST",
-        headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
-        body:JSON.stringify({
-          name, subject: subject||`Campaign: ${name}`,
-          body: "<p>Email to be written in Mailrelay.</p>",
-          contacts,
-          sender_email: "noreply@spain-internship.com",
-          sender_name:  "Spain Internship",
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        onCreate(data);
-      }
-    } catch {}
-    window.open("https://app.mailrelay.com/campaigns","_blank");
+  const handleSkip = () => {
+    // Just open Mailrelay directly — group + contacts already created in step 1
+    window.open("https://spain-internship.ipzmarketing.com/admin/campaigns","_blank");
     onClose();
   };
 
