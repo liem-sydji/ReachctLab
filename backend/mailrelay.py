@@ -47,54 +47,27 @@ def create_group(api_key: str, name: str) -> dict:
 
 def add_subscribers(api_key: str, group_id: int, emails: list) -> dict:
     """
-    Bulk import subscribers to a Mailrelay group using the imports endpoint.
-    This mirrors the UI paste import — handles new and existing subscribers.
+    Add subscribers to a Mailrelay group using the sync endpoint.
+    sync = create if new, update if existing — no "already exists" error.
     """
     group_id = int(group_id)
     valid    = [str(e).strip().lower() for e in emails if e and "@" in str(e)]
-    if not valid:
-        return {"success": 0, "failed": 0, "errors": ["No valid emails"]}
-    try:
-        result = mailrelay_request(api_key, "POST", "/api/v1/imports", {
-            "name":        f"ReachCT import {group_id}",
-            "subscribers": [{"email": e} for e in valid],
-            "group_ids":   [group_id],
-        })
-        print(f"🔍 Import result: {result}")
-        return {"success": len(valid), "failed": 0, "errors": []}
-    except Exception as e:
-        print(f"⚠️ Bulk import failed: {e}, trying individual adds...")
-        results = {"success": 0, "failed": 0, "errors": []}
-        for email in valid:
-            try:
-                mailrelay_request(api_key, "POST", "/api/v1/subscribers", {
-                    "email":     email,
-                    "group_ids": [group_id],
-                    "status":    "active",
-                })
-                results["success"] += 1
-            except Exception as e2:
-                if "already exists" in str(e2).lower():
-                    try:
-                        search = mailrelay_request(api_key, "GET",
-                            f"/api/v1/subscribers?email={email}")
-                        subs = search if isinstance(search, list) else []
-                        if subs:
-                            sub_id = subs[0].get("id")
-                            current = subs[0].get("group_ids", [])
-                            if group_id not in current:
-                                current.append(group_id)
-                            mailrelay_request(api_key, "PATCH",
-                                f"/api/v1/subscribers/{sub_id}",
-                                {"group_ids": current})
-                        results["success"] += 1
-                    except Exception as e3:
-                        results["failed"] += 1
-                        results["errors"].append(f"{email}: {str(e3)}")
-                else:
-                    results["failed"] += 1
-                    results["errors"].append(f"{email}: {str(e2)}")
-        return results
+    results  = {"success": 0, "failed": 0, "errors": []}
+
+    for email in valid:
+        try:
+            mailrelay_request(api_key, "POST", "/api/v1/subscribers/sync", {
+                "email":     email,
+                "group_ids": [group_id],
+                "status":    "active",
+            })
+            results["success"] += 1
+        except Exception as e:
+            print(f"⚠️ sync failed for {email}: {e}")
+            results["failed"] += 1
+            results["errors"].append(f"{email}: {str(e)}")
+
+    return results
 
 
 def create_campaign(api_key: str, name: str, subject: str, body: str,

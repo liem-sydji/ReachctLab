@@ -782,6 +782,8 @@ def create_new_campaign(body: CreateCampaignRequest, authorization: str = Header
         total_subscribed = 0
         total_failed     = 0
 
+        print(f"🔍 Received groups: {body.groups}")
+        print(f"🔍 Received contacts: {len(body.contacts)}")
         # Use named groups if provided, otherwise fall back to flat contacts
         groups_to_create = body.groups if body.groups else [
             GroupData(name=body.name, emails=[
@@ -822,10 +824,11 @@ def create_new_campaign(body: CreateCampaignRequest, authorization: str = Header
         if not all_group_ids:
             raise Exception("No groups were created successfully")
 
-        # 3. Create campaign draft targeting all groups
-        print(f"🔍 Creating campaign with group_ids={all_group_ids} sender_id={body.sender_id}")
+        # 3. Create campaign draft — use subject as the campaign name
+        campaign_name = body.subject or body.name or "ReachCT Campaign"
+        print(f"🔍 Creating campaign '{campaign_name}' with group_ids={all_group_ids} sender_id={body.sender_id}")
         campaign = create_campaign(
-            api_key, body.name, body.subject,
+            api_key, campaign_name, body.subject,
             body.body or "<p>Email body — edit in Mailrelay before sending.</p>",
             all_group_ids[0], body.sender_id
         )

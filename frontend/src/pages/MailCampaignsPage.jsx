@@ -210,7 +210,7 @@ function RichEditor({ value, onChange, height=280 }) {
 }
 
 // ─── Step 1 — Name + Groups ───────────────────────────────────────────────────
-function Step1({ name, setName, groups, setGroups, token, onNext, onClose }) {
+function Step1({ groups, setGroups, token, onNext, onClose }) {
   const [databases,    setDatabases]    = useState([]);
   const [selectedDb,   setSelectedDb]   = useState(null);
   const [entries,      setEntries]      = useState([]);
@@ -274,7 +274,6 @@ function Step1({ name, setName, groups, setGroups, token, onNext, onClose }) {
   const totalEmails = groups.reduce((sum, g) => sum + g.emails.size, 0);
 
   const handleNext = () => {
-    if (!name.trim()) { setError("Please enter a campaign name."); return; }
     if (groups.length === 0) { setError("Add at least one group."); return; }
     if (totalEmails === 0) { setError("Add at least one email to a group."); return; }
     onNext();
@@ -283,15 +282,7 @@ function Step1({ name, setName, groups, setGroups, token, onNext, onClose }) {
   return (
     <>
       <h2 style={{ fontFamily:"'Syne',sans-serif", fontSize:20, fontWeight:800,
-        color:"#111", margin:"0 0 20px" }}>Name & Create Groups</h2>
-
-      {/* Campaign name */}
-      <div style={{ marginBottom:20 }}>
-        <label style={labelStyle}>Campaign Name</label>
-        <input value={name} onChange={e=>setName(e.target.value)}
-          placeholder="e.g. Real Estate Outreach Spain Q3"
-          style={inputStyle} />
-      </div>
+        color:"#111", margin:"0 0 20px" }}>Create Contact Groups</h2>
 
       {/* Groups */}
       <div style={{ marginBottom:16 }}>
@@ -420,7 +411,7 @@ function Step1({ name, setName, groups, setGroups, token, onNext, onClose }) {
 }
 
 // ─── Step 2 — Write Email ─────────────────────────────────────────────────────
-function Step2({ name, subject, setSubject, body, setBody, totalEmails, token, onBack, onNext, onSkip }) {
+function Step2({ name, subject, setSubject, body, setBody, totalEmails, groups, token, onBack, onNext, onSkip }) {
   const [templates,     setTemplates]     = useState([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [aiInput,       setAiInput]       = useState("");
@@ -465,7 +456,7 @@ function Step2({ name, subject, setSubject, body, setBody, totalEmails, token, o
       <h2 style={{ fontFamily:"'Syne',sans-serif", fontSize:20, fontWeight:800,
         color:"#111", margin:"0 0 4px" }}>Write Your Email</h2>
       <p style={{ fontSize:13, color:"#999", marginBottom:16 }}>
-        Sending to <strong style={{ color:"#111" }}>{totalEmails}</strong> contacts.
+        Sending to <strong style={{ color:"#111" }}>{totalEmails}</strong> contacts across <strong style={{ color:"#111" }}>{groups?.length||1}</strong> group{(groups?.length||1)!==1?"s":""}.
       </p>
 
       {/* Import template */}
@@ -599,7 +590,8 @@ function Step3({ name, subject, body, groups, token, onBack, onCreate, onClose }
         method:"POST",
         headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
         body:JSON.stringify({
-          name, subject,
+          name: subject || groups[0]?.name || "ReachCT Campaign",
+          subject,
           body: body || "<p>Email body — edit in Mailrelay before sending.</p>",
           contacts,
           sender_id: Number(senderId),
@@ -623,8 +615,7 @@ function Step3({ name, subject, body, groups, token, onBack, onCreate, onClose }
       </p>
 
       <div style={{ background:"#f8f8f8", borderRadius:12, padding:16, marginBottom:20 }}>
-        <div style={{ fontWeight:600, color:"#111", marginBottom:6, fontSize:14 }}>{name}</div>
-        <div style={{ color:"#666", fontSize:13 }}>Subject: {subject}</div>
+        <div style={{ fontWeight:600, color:"#111", marginBottom:6, fontSize:14 }}>Subject: {subject}</div>
         <div style={{ color:"#666", fontSize:13 }}>
           {groups.length} group{groups.length!==1?"s":""} · {totalEmails} contacts total
         </div>
@@ -688,7 +679,7 @@ function CreateCampaignModal({ onClose, onCreate, token }) {
     onClose();
   };
 
-  const stepLabel = ["Name & Groups","Write Email","Review & Send"];
+  const stepLabel = ["Create Groups","Write Email","Review & Send"];
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:1000,
@@ -716,10 +707,10 @@ function CreateCampaignModal({ onClose, onCreate, token }) {
           ))}
         </div>
 
-        {step===1 && <Step1 name={name} setName={setName} groups={groups} setGroups={setGroups}
+        {step===1 && <Step1 groups={groups} setGroups={setGroups}
           token={token} onNext={()=>setStep(2)} onClose={onClose} />}
         {step===2 && <Step2 name={name} subject={subject} setSubject={setSubject}
-          body={body} setBody={setBody} totalEmails={totalEmails} token={token}
+          body={body} setBody={setBody} totalEmails={totalEmails} groups={groups} token={token}
           onBack={()=>setStep(1)} onNext={()=>setStep(3)} onSkip={handleSkip} />}
         {step===3 && <Step3 name={name} subject={subject} body={body} groups={groups}
           token={token} onBack={()=>setStep(2)} onCreate={onCreate} onClose={onClose} />}
