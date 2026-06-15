@@ -265,9 +265,13 @@ function SearchModal({ onClose, onSearch, token }) {
         </div>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
           <div><label style={labelStyle}>Start</label>
-            <input style={inputStyle} type="number" min="0" value={start} onChange={e=>setStart(Number(e.target.value)||0)}/></div>
+            <input style={inputStyle} type="number" min="0" value={start}
+              onChange={e=>{ const v=e.target.value; setStart(v===""?"":Number(v)); }}
+              onBlur={e=>{ if(e.target.value==="") setStart(0); }}/></div>
           <div><label style={labelStyle}>End (max +50)</label>
-            <input style={inputStyle} type="number" min="1" value={end} onChange={e=>setEnd(Math.min(Number(e.target.value)||25,(start||0)+50))}/></div>
+            <input style={inputStyle} type="number" min="1" value={end}
+              onChange={e=>{ const v=e.target.value; setEnd(v===""?"":Math.min(Number(v),(start||0)+50)); }}
+              onBlur={e=>{ if(e.target.value==="") setEnd(25); }}/></div>
         </div>
         {loading && (
           <div style={{ display:"flex", alignItems:"center", gap:12, color:"#666", fontSize:13 }}>
