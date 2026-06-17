@@ -128,15 +128,47 @@ function ModalFooter({ onClose, onConfirm, loading, label, disabled }) {
 }
 
 // ─── Pull Modal ───────────────────────────────────────────────────────────────
-function PullModal({ onClose, onPull, filters }) {
+function PullModal({ onClose, onPull, filters, kind, liFilters }) {
   const [queries, setQueries]     = useState([]);
   const [cities, setCities]       = useState([]);
   const [countries, setCountries] = useState([]);
+  // LinkedIn filters
+  const [jobTitles, setJobTitles] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [locations, setLocations] = useState([]);
   const [loading, setLoading]     = useState(false);
-  const allTypes    = filters?.company_types || [];
+
+  const allTypes     = filters?.company_types || [];
   const allCountries = filters?.countries || [];
-  const allCities   = filters?.cities ? Object.values(filters.cities).flat() : [];
-  const handlePull = async () => { setLoading(true); await onPull({queries,cities,countries}); setLoading(false); onClose(); };
+  const allCities    = filters?.cities ? Object.values(filters.cities).flat() : [];
+
+  const handlePull = async () => {
+    setLoading(true);
+    if (kind === "linkedin") {
+      await onPull({ job_titles:jobTitles, companies, locations });
+    } else {
+      await onPull({ queries, cities, countries });
+    }
+    setLoading(false); onClose();
+  };
+
+  if (kind === "linkedin") {
+    return (
+      <ModalWrap onClose={onClose} title="Pull from LinkedIn Database" subtitle="Import people from your shared LinkedIn contacts.">
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          <div><label style={labelStyle}>Job Title</label>
+            <TagInput placeholder="e.g. HR Manager" options={liFilters?.job_titles||[]} value={jobTitles} onChange={setJobTitles} /></div>
+          <div><label style={labelStyle}>Company</label>
+            <TagInput placeholder="e.g. Kreaset" options={liFilters?.companies||[]} value={companies} onChange={setCompanies} /></div>
+          <div><label style={labelStyle}>Location</label>
+            <TagInput placeholder="e.g. Madrid" options={liFilters?.locations||[]} value={locations} onChange={setLocations} /></div>
+          <p style={{ fontSize:12, color:"#999" }}>Multiple values are OR-matched. Leave empty to pull all.</p>
+        </div>
+        <ModalFooter onClose={onClose} onConfirm={handlePull} loading={loading} label="Pull Data" />
+      </ModalWrap>
+    );
+  }
+
   return (
     <ModalWrap onClose={onClose} title="Pull from Database" subtitle="Import contacts from the shared ReachCT database.">
       <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
@@ -639,6 +671,7 @@ export default function SpreadsheetPage() {
   const [columns, setColumns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({});
+  const [liFilters, setLiFilters] = useState({});
   const [modal, setModal]     = useState(null);
 
   // isViewer must be declared before useEffects that reference it
@@ -746,6 +779,7 @@ export default function SpreadsheetPage() {
     if (!token) { navigate("/login"); return; }
     fetchAll();
     fetch(`${API}/api/filters`).then(r=>r.json()).then(setFilters).catch(()=>{});
+    fetch(`${API}/api/linkedin/filters`, { headers:{Authorization:`Bearer ${token}`} }).then(r=>r.json()).then(setLiFilters).catch(()=>{});
   }, [dbId, token]);
 
   const fetchAll = async () => {
@@ -765,7 +799,18 @@ export default function SpreadsheetPage() {
         return Object.values(data).some(v => v && String(v).trim() !== "");
       });
       setEntries(realRows);
-      setColumns(deriveColumns(realRows));
+      const derived = deriveColumns(realRows);
+      const theDb = (Array.isArray(dbs)?dbs:[]).find(d=>String(d.id)===String(dbId));
+      if (derived.length === 0) {
+        // Empty DB — show default columns based on kind
+        if (theDb?.kind === "linkedin") {
+          setColumns(["full_name","job_title","company","email","linkedin_url","location"]);
+        } else {
+          setColumns(["name","email","phone","website","city","country","company_type"]);
+        }
+      } else {
+        setColumns(derived);
+      }
     } catch {}
     setLoading(false);
   };
@@ -845,10 +890,30 @@ export default function SpreadsheetPage() {
   }, [dbId, token]);
 
   // ── Pull from DB ──
-  const handlePull = async ({ queries, cities, countries }) => {
+  const handlePull = async (params) => {
+    if (db?.kind === "linkedin") {
+      // Pull from shared LinkedIn DB then add rows to this database
+      const res  = await fetch(`${API}/api/linkedin/pull`, {
+        method:"POST", headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
+        body:JSON.stringify(params),
+      });
+      const data = await res.json();
+      const rows = (data.results||[]).map(r => ({
+        full_name:r.full_name||"", job_title:r.job_title||"", company:r.company||"",
+        email:r.email||"", linkedin_url:r.linkedin_url||"", location:r.location||"",
+      }));
+      if (rows.length) {
+        await fetch(`${API}/api/databases/add-rows`, {
+          method:"POST", headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
+          body:JSON.stringify({ db_id: Number(dbId), rows }),
+        });
+      }
+      fetchAll();
+      return;
+    }
     const res  = await fetch(`${API}/api/databases/${dbId}/pull`, {
       method:"POST", headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
-      body:JSON.stringify({queries, cities, countries}),
+      body:JSON.stringify(params),
     });
     const data = await res.json();
     if (data.columns) setColumns(prev => [...new Set([...prev, ...data.columns])]);
@@ -963,7 +1028,7 @@ export default function SpreadsheetPage() {
         />
       </div>
 
-      {modal==="pull"   && <PullModal   onClose={()=>setModal(null)} onPull={handlePull} filters={filters} />}
+      {modal==="pull"   && <PullModal   onClose={()=>setModal(null)} onPull={handlePull} filters={filters} kind={db?.kind} liFilters={liFilters} />}
       {modal==="upload" && <UploadModal onClose={()=>setModal(null)} onUpload={handleUpload} />}
       {modal==="search" && <SearchModal onClose={()=>setModal(null)} onSearch={handleSearch} token={token} />}
       {modal==="share"  && <CollaboratorModal onClose={()=>setModal(null)} dbId={dbId} token={token} />}

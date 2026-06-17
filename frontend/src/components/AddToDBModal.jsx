@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useAuth } from "../context/AuthContext.jsx";
 import { API } from "../styles.js";
 
-export default function AddToDBModal({ rows, onClose }) {
+export default function AddToDBModal({ rows, onClose, dbKind = "maps" }) {
   const { token }               = useAuth();
   const [databases, setDatabases] = useState([]);
   const [selected, setSelected]   = useState([]);   // selected row indices
@@ -13,8 +13,13 @@ export default function AddToDBModal({ rows, onClose }) {
 
   useEffect(() => {
     fetch(`${API}/api/databases`, { headers:{ Authorization:`Bearer ${token}` } })
-      .then(r=>r.json()).then(data=>setDatabases(Array.isArray(data)?data:[])).catch(()=>{});
-  }, [token]);
+      .then(r=>r.json())
+      .then(data=>{
+        const all = Array.isArray(data) ? data : [];
+        // Only show databases matching this kind (maps or linkedin)
+        setDatabases(all.filter(db => (db.kind || "maps") === dbKind));
+      }).catch(()=>{});
+  }, [token, dbKind]);
 
   const toggleRow = (i) => setSelected(prev => prev.includes(i) ? prev.filter(x=>x!==i) : [...prev, i]);
   const selectAll = () => setSelected(rows.map((_,i)=>i));
@@ -88,7 +93,7 @@ export default function AddToDBModal({ rows, onClose }) {
                       fontWeight:600, color:"#999", letterSpacing:"0.06em", textTransform:"uppercase" }}>Email</th>
                     <th style={{ padding:"10px 12px", background:"#f8f8f8",
                       borderBottom:"2px solid #eee", textAlign:"left", fontSize:11,
-                      fontWeight:600, color:"#999", letterSpacing:"0.06em", textTransform:"uppercase" }}>Location</th>
+                      fontWeight:600, color:"#999", letterSpacing:"0.06em", textTransform:"uppercase" }}>{dbKind==="linkedin"?"Title":"Location"}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -101,12 +106,14 @@ export default function AddToDBModal({ rows, onClose }) {
                           onClick={e=>e.stopPropagation()} /></td>
                       <td style={{ padding:"10px 12px", fontWeight:500, color:"#111",
                         maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                        {row.name||"—"}</td>
+                        {row.name||row.full_name||"—"}</td>
                       <td style={{ padding:"10px 12px", color:"#E8005A", fontSize:12,
                         maxWidth:160, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                         {row.email||"—"}</td>
                       <td style={{ padding:"10px 12px", color:"#888", fontSize:12 }}>
-                        {[row.city,row.country].filter(Boolean).join(", ")||"—"}</td>
+                        {dbKind==="linkedin"
+                          ? (row.job_title||"—")
+                          : ([row.city,row.country].filter(Boolean).join(", ")||"—")}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -128,7 +135,7 @@ export default function AddToDBModal({ rows, onClose }) {
             <div style={{ overflowY:"auto", flex:1, display:"flex", flexDirection:"column", gap:10 }}>
               {databases.length === 0 && (
                 <div style={{ textAlign:"center", color:"#999", fontSize:14, padding:"40px 0" }}>
-                  No databases yet — create one in My Dashboard first.</div>
+                  No {dbKind==="linkedin"?"LinkedIn":"Maps"} databases yet — create one in My Dashboard first.</div>
               )}
               {databases.map(db => (
                 <div key={db.id} onClick={()=>setChosenDb(db.id)} style={{

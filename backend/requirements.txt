@@ -10,3 +10,5 @@ google-auth
 python-jose[cryptography]
 pandas
 anthropic
+python-dotenv
+dnspython

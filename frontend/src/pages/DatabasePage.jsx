@@ -156,11 +156,35 @@ function PullTab() {
   };
 
   const handleExport = () => {
-    const params = new URLSearchParams();
-    if (cities.length)    params.append("city", cities[0]);
-    if (countries.length) params.append("country", countries[0]);
-    if (queries.length)   params.append("query", queries[0]);
-    window.open(`${API}/api/export?${params}`, "_blank");
+    if (!results.length) return;
+    // Export exactly what's shown — not a re-query
+    import("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js")
+      .catch(() => {
+        // Fallback: download as CSV if XLSX not available
+        const headers = ["Company Name","Email","Phone","Website","City","Country","Company Type"];
+        const rows    = results.map(r=>[r.name||"",r.email||"",r.phone||"",r.website||"",r.city||"",r.country||"",r.company_type||""]);
+        const csv     = [headers,...rows].map(r=>r.map(v=>`"${v}"`).join(",")).join("\n");
+        const blob    = new Blob([csv], {type:"text/csv"});
+        const url     = URL.createObjectURL(blob);
+        const a       = document.createElement("a");
+        a.href        = url;
+        a.download    = `reachct_export_${new Date().toISOString().slice(0,10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+    // Use SheetJS from CDN via dynamic approach — just do CSV for reliability
+    const headers = ["Company Name","Email","Phone","Website","City","Country","Company Type"];
+    const rows    = results.map(r=>[r.name||"",r.email||"",r.phone||"",r.website||"",r.city||"",r.country||"",r.company_type||""]);
+    const csv     = [headers,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+    const blob    = new Blob(["\uFEFF"+csv], {type:"text/csv;charset=utf-8;"});
+    const url     = URL.createObjectURL(blob);
+    const a       = document.createElement("a");
+    a.href        = url;
+    a.download    = `reachct_export_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const handleCopy = () => {

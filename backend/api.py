@@ -1,9 +1,11 @@
 """
 ReachCT — api.py  v2.1
-FastAPI backend — scraper + auth + user databases + Claude upload cleaning.
+FastAPI backend — scraper + auth + user databases + Gemini upload cleaning.
 """
 
 import os, sys, uuid, json, asyncio, io, re
+from dotenv import load_dotenv
+load_dotenv()
 from datetime import datetime
 from typing import Optional, List
 
@@ -25,6 +27,28 @@ from database import (
 )
 from reachct import scrape_google_maps, export_to_excel
 from auth    import verify_google_token, create_jwt, decode_jwt
+
+# ── Inline AI helpers (Claude Haiku) ─────────────────────────────────────────
+import anthropic as _anthropic
+import re as _re
+
+def _get_claude():
+    return _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
+
+def _generate(prompt: str, max_tokens: int = 2000) -> str:
+    msg = _get_claude().messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=max_tokens,
+        messages=[{"role":"user","content":prompt}]
+    )
+    return msg.content[0].text.strip()
+
+def _generate_json(prompt: str, max_tokens: int = 2000) -> str:
+    text = _generate(prompt, max_tokens)
+    text = _re.sub(r"```json\s*","",text)
+    text = _re.sub(r"```\s*","",text)
+    return text.strip()
+
 
 app = FastAPI(title="ReachCT API", version="2.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -64,6 +88,11 @@ def get_current_user(authorization: str = None) -> dict:
 @app.on_event("startup")
 def startup():
     init_db()
+    try:
+        from database import init_linkedin_table
+        init_linkedin_table()
+    except Exception as e:
+        print(f"⚠️  LinkedIn table init: {e}")
     print("✅ ReachCT API ready")
 
 @app.get("/api/health")
@@ -176,11 +205,12 @@ def get_searches_endpoint():
 # ── User Databases ────────────────────────────────────────────────────────────
 class CreateDBRequest(BaseModel):
     name: str
+    kind: str = "maps"   # "maps" or "linkedin"
 
 @app.post("/api/databases")
 def create_db(body: CreateDBRequest, authorization: str = Header(default=None)):
     user = get_current_user(authorization)
-    return create_user_database(int(user["sub"]), body.name.strip())
+    return create_user_database(int(user["sub"]), body.name.strip(), body.kind)
 
 @app.get("/api/databases")
 def list_dbs(authorization: str = Header(default=None)):
@@ -300,7 +330,6 @@ async def upload_file(db_id: int, file: UploadFile = File(...), authorization: s
 
     try:
         import pandas as pd
-        import anthropic
 
         contents = await file.read()
         buf      = io.BytesIO(contents)
@@ -317,14 +346,8 @@ async def upload_file(db_id: int, file: UploadFile = File(...), authorization: s
         # Convert to raw text for Claude to analyze
         raw_text = df.to_csv(index=False, header=False)
 
-        # Ask Claude to identify and standardize the data
-        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4000,
-            messages=[{
-                "role": "user",
-                "content": f"""You are a data extraction specialist. Your job is to find company contact information in messy, unlabeled spreadsheet data.
+        # Ask Gemini to identify and standardize the data
+        _prompt = f"""You are a data extraction specialist. Your job is to find company contact information in messy, unlabeled spreadsheet data.
 
 The data below may have: no headers, wrong column order, empty rows, mixed languages, extra noise, or partial information.
 
@@ -340,10 +363,9 @@ Instructions:
 6. Clean: lowercase emails, keep only digits/+/spaces in phones, skip rows that are completely empty or clearly not company data
 
 Return ONLY the JSON array starting with [ and ending with ]"""
-            }]
-        )
+        _ai_result = _generate_json(_prompt, max_tokens=4000)
 
-        response_text = message.content[0].text.strip()
+        response_text = _ai_result
         # Strip markdown if present
         response_text = re.sub(r"```json\s*", "", response_text)
         response_text = re.sub(r"```\s*", "", response_text)
@@ -351,7 +373,7 @@ Return ONLY the JSON array starting with [ and ending with ]"""
         cleaned_rows = json.loads(response_text)
 
         if not isinstance(cleaned_rows, list):
-            raise ValueError("Claude did not return a list")
+            raise ValueError("Gemini did not return a list")
 
         # Save to user database
         entries = add_db_entries(db_id, [dict(row) for row in cleaned_rows])
@@ -371,10 +393,10 @@ Return ONLY the JSON array starting with [ and ending with ]"""
                 })
 
         cols = ["name","email","phone","website","city","country","company_type"]
-        return {"inserted": len(entries), "columns": cols, "cleaned_by": "claude"}
+        return {"inserted": len(entries), "columns": cols, "cleaned_by": "gemini"}
 
     except json.JSONDecodeError:
-        raise HTTPException(status_code=422, detail="Claude could not parse the file. Make sure it contains company data.")
+        raise HTTPException(status_code=422, detail="Gemini could not parse the file. Make sure it contains company data.")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Upload failed: {str(e)}")
 
@@ -459,7 +481,6 @@ async def upload_shared(file: UploadFile = File(...), authorization: str = Heade
     user = get_current_user(authorization)  # must be logged in
     try:
         import pandas as pd
-        import anthropic
 
         contents = await file.read()
         buf      = io.BytesIO(contents)
@@ -472,11 +493,7 @@ async def upload_shared(file: UploadFile = File(...), authorization: str = Heade
         df = df.dropna(axis=1, how="all")
         raw_text = df.to_csv(index=False, header=False)
 
-        client  = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4000,
-            messages=[{"role":"user","content":f"""You are a data cleaning assistant. Analyze this raw spreadsheet data and extract company contact information.
+        _prompt = f"""You are a data cleaning assistant. Analyze this raw spreadsheet data and extract company contact information.
 
 Raw data:
 {raw_text}
@@ -485,10 +502,10 @@ Return ONLY a valid JSON array. Each object must have these keys (use "" if unkn
 name, email, phone, website, city, country, company_type
 
 Rules: skip empty rows, clean phones (digits/+ only), lowercase emails, don't invent data.
-Return ONLY the JSON array, no explanation."""}]
-        )
+Return ONLY the JSON array, no explanation."""
+        _ai_result = _generate_json(_prompt, max_tokens=4000)
 
-        response_text = re.sub(r"```json\s*","",message.content[0].text.strip())
+        response_text = re.sub(r"```json\s*","",_ai_result)
         response_text = re.sub(r"```\s*","",response_text)
         cleaned_rows  = json.loads(response_text)
 
@@ -507,10 +524,10 @@ Return ONLY the JSON array, no explanation."""}]
                 })
                 inserted += 1
 
-        return {"inserted": inserted, "cleaned_by": "claude"}
+        return {"inserted": inserted, "cleaned_by": "gemini"}
 
     except json.JSONDecodeError:
-        raise HTTPException(status_code=422, detail="Claude could not parse the file. Please ensure it contains company data.")
+        raise HTTPException(status_code=422, detail="Gemini could not parse the file. Please ensure it contains company data.")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Upload failed: {str(e)}")
 
@@ -624,31 +641,30 @@ class ReachAIRequest(BaseModel):
 @app.post("/api/ai/chat")
 async def reachai_chat(body: ReachAIRequest, authorization: str = Header(default=None)):
     """ReachAI — agentic Claude endpoint with tool use."""
-    import anthropic
     import threading
 
     user    = get_current_user(authorization)
     user_id = int(user["sub"])
-    client  = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
 
     messages = list(body.messages)
     MAX_ITERS = 10
 
+    import anthropic as _anthropic
+    _client = _anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
+
     for _ in range(MAX_ITERS):
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
+        response = _client.messages.create(
+            model="claude-haiku-4-5-20251001",
             max_tokens=2000,
             system=REACHAI_SYSTEM,
             tools=REACHAI_TOOLS,
-            messages=messages,
+            messages=messages[-8:],  # limit history to last 8 messages
         )
 
-        # Collect all text and tool_use blocks
         assistant_content = response.content
         messages.append({"role": "assistant", "content": assistant_content})
 
         if response.stop_reason == "end_turn":
-            # Extract final text
             text = " ".join(b.text for b in assistant_content if hasattr(b, "text"))
             return {"reply": text, "messages": messages}
 
@@ -656,14 +672,12 @@ async def reachai_chat(body: ReachAIRequest, authorization: str = Header(default
             text = " ".join(b.text for b in assistant_content if hasattr(b, "text"))
             return {"reply": text, "messages": messages}
 
-        # Execute tool calls
         tool_results = []
         for block in assistant_content:
             if block.type != "tool_use":
                 continue
             tool_name  = block.name
             tool_input = block.input
-
             try:
                 if tool_name == "list_databases":
                     result = tool_list_databases(user_id)
@@ -682,15 +696,11 @@ async def reachai_chat(body: ReachAIRequest, authorization: str = Header(default
                 elif tool_name == "create_database":
                     result = tool_create_database(user_id, tool_input["name"])
                 elif tool_name == "search_google_maps":
-                    # Run in separate thread since it blocks
                     search_result = {}
                     def run_search():
                         search_result.update(tool_search_google_maps(
-                            tool_input["query"],
-                            tool_input["city"],
-                            tool_input["country"],
-                            tool_input.get("start", 0),
-                            tool_input.get("end", 25),
+                            tool_input["query"], tool_input["city"], tool_input["country"],
+                            tool_input.get("start", 0), tool_input.get("end", 25),
                             jobs, search_queue,
                         ))
                     t = threading.Thread(target=run_search)
@@ -874,9 +884,7 @@ class GenerateCampaignRequest(BaseModel):
 @app.post("/api/campaigns/generate")
 def generate_campaign_content(body: GenerateCampaignRequest, authorization: str = Header(default=None)):
     """Use Claude to generate email subject and body for a campaign."""
-    import anthropic
     user   = get_current_user(authorization)
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
 
     sample_names = [c.get("name","") for c in body.sample_contacts[:5] if c.get("name")]
     context      = f"Campaign: {body.campaign_name}"
@@ -885,10 +893,7 @@ def generate_campaign_content(body: GenerateCampaignRequest, authorization: str 
     if sample_names:
         context += f"\nExample companies: {', '.join(sample_names)}"
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=800,
-        messages=[{"role":"user","content":f"""Generate a professional B2B outreach email for the following campaign.
+        _prompt = f"""Generate a professional B2B outreach email for the following campaign.
 
 {context}
 
@@ -896,11 +901,11 @@ Return ONLY a JSON object with exactly two keys:
 - "subject": a compelling email subject line (max 60 chars)
 - "body": the email body in HTML format, professional and concise (150-200 words). Use {{{{name}}}} for the contact name and {{{{company}}}} for the company name as merge tags.
 
-Return ONLY the JSON, no explanation."""}]
-    )
+Return ONLY the JSON, no explanation."""
+        _ai_result = _generate_json(_prompt, max_tokens=800)
 
     try:
-        text = message.content[0].text.strip()
+        text = _ai_result
         text = re.sub(r"```json\s*","",text)
         text = re.sub(r"```\s*","",text)
         result = json.loads(text)
@@ -957,15 +962,10 @@ class EnhanceEmailRequest(BaseModel):
 
 @app.post("/api/campaigns/enhance")
 def enhance_email(body: EnhanceEmailRequest, authorization: str = Header(default=None)):
-    """Claude enhances/appends to the current email body based on user instruction."""
-    import anthropic
+    """Gemini enhances/appends to the current email body based on user instruction."""
     get_current_user(authorization)
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY",""))
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1500,
-        messages=[{"role":"user","content":f"""You are an email writing assistant for a B2B internship placement company.
+    result = _generate(f"""You are an email writing assistant for a B2B internship placement company.
 
 Current email body:
 {body.current_body or "(empty)"}
@@ -981,7 +981,168 @@ Task: Follow the user's instruction exactly. You may:
 
 Return ONLY the updated/new email body as clean HTML. No explanation. No markdown fences.
 Preserve any existing content unless told to replace it.
-Add your contribution clearly separated if appending."""}]
-    )
+Add your contribution clearly separated if appending.""", max_tokens=1500)
 
-    return {"body": message.content[0].text.strip()}
+    return {"body": result}
+
+
+
+
+# ── LinkedIn / People Search ──────────────────────────────────────────────────
+from database import (init_linkedin_table, upsert_linkedin_contact,
+                      get_linkedin_contacts, get_linkedin_filters)
+
+linkedin_jobs: dict = {}
+
+class LinkedInSearchRequest(BaseModel):
+    role:        str = ""
+    company:     str = ""
+    location:    str = ""
+    keyword:     str = ""
+    domain:      str = ""   # company domain for email guessing
+    max_results: int = 15
+
+@app.post("/api/linkedin/search")
+def start_linkedin_search(body: LinkedInSearchRequest, authorization: str = Header(default=None)):
+    get_current_user(authorization)
+    if not (body.role or body.company or body.keyword):
+        raise HTTPException(status_code=400, detail="Provide at least a role, company, or keyword")
+
+    job_id = str(uuid.uuid4())[:8]
+    linkedin_jobs[job_id] = {"status":"running","found":0,"results":[],"error":None}
+
+    def run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            from linkedin import scrape_linkedin_people
+            results = loop.run_until_complete(scrape_linkedin_people(
+                body.role, body.company, body.location, body.keyword,
+                body.domain, min(body.max_results, 30), linkedin_jobs, job_id
+            ))
+            # Save to shared LinkedIn DB
+            for person in results:
+                if person.get("linkedin_url"):
+                    upsert_linkedin_contact(person)
+            linkedin_jobs[job_id]["results"] = results
+            linkedin_jobs[job_id]["status"]  = "done"
+        except Exception as e:
+            linkedin_jobs[job_id]["status"] = "error"
+            linkedin_jobs[job_id]["error"]  = str(e)
+            print(f"❌ LinkedIn search error: {e}")
+        finally:
+            loop.close()
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job_id}
+
+@app.get("/api/linkedin/status/{job_id}")
+def linkedin_status(job_id: str, authorization: str = Header(default=None)):
+    get_current_user(authorization)
+    job = linkedin_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+@app.get("/api/linkedin/filters")
+def linkedin_filters(authorization: str = Header(default=None)):
+    get_current_user(authorization)
+    return get_linkedin_filters()
+
+class LinkedInPullRequest(BaseModel):
+    job_titles: List[str] = []
+    companies:  List[str] = []
+    locations:  List[str] = []
+
+@app.post("/api/linkedin/pull")
+def linkedin_pull(body: LinkedInPullRequest, authorization: str = Header(default=None)):
+    get_current_user(authorization)
+    all_results = []
+    seen = set()
+    # If no filters, pull everything
+    combos = []
+    if body.job_titles or body.companies or body.locations:
+        jt = body.job_titles or [""]
+        co = body.companies or [""]
+        lo = body.locations or [""]
+        for j in jt:
+            for c in co:
+                for l in lo:
+                    combos.append((j, c, l))
+    else:
+        combos = [("", "", "")]
+
+    for j, c, l in combos:
+        for row in get_linkedin_contacts(j, c, l):
+            if row["id"] not in seen:
+                seen.add(row["id"])
+                all_results.append(row)
+    return {"results": all_results, "count": len(all_results)}
+
+
+# ── LinkedIn Bulk Search ──────────────────────────────────────────────────────
+class LinkedInBulkRequest(BaseModel):
+    items:           List[str] = []   # pasted emails/domains/companies
+    from_db_id:      int = 0           # optional: pull companies from a Maps DB
+    role:            str = ""
+    location:        str = ""
+    max_per_company: int = 5
+
+@app.post("/api/linkedin/bulk")
+def start_linkedin_bulk(body: LinkedInBulkRequest, authorization: str = Header(default=None)):
+    user    = get_current_user(authorization)
+    user_id = int(user["sub"])
+
+    raw_items = list(body.items)
+
+    # If pulling from a Maps database, extract company names + domains from website
+    if body.from_db_id:
+        db = get_user_database(body.from_db_id, user_id)
+        if db:
+            for entry in get_db_entries(body.from_db_id):
+                data = entry.get("data", {})
+                website = data.get("website", "")
+                email   = data.get("email", "")
+                name    = data.get("name", "")
+                if website:
+                    raw_items.append(website)
+                elif email and "@" in email:
+                    raw_items.append(email)
+                elif name:
+                    raw_items.append(name)
+
+    if not raw_items:
+        raise HTTPException(status_code=400, detail="No companies/emails/domains provided")
+
+    from linkedin import parse_bulk_input
+    targets = parse_bulk_input(raw_items)
+    if not targets:
+        raise HTTPException(status_code=400, detail="Could not parse any valid targets")
+
+    job_id = str(uuid.uuid4())[:8]
+    linkedin_jobs[job_id] = {"status":"running","found":0,"results":[],"error":None,
+                             "processing":None,"company_index":0,"total_companies":len(targets)}
+
+    def run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            from linkedin import scrape_linkedin_bulk
+            results = loop.run_until_complete(scrape_linkedin_bulk(
+                targets, body.role, body.location,
+                min(body.max_per_company, 10), linkedin_jobs, job_id
+            ))
+            for person in results:
+                if person.get("linkedin_url"):
+                    upsert_linkedin_contact(person)
+            linkedin_jobs[job_id]["results"] = results
+            linkedin_jobs[job_id]["status"]  = "done"
+        except Exception as e:
+            linkedin_jobs[job_id]["status"] = "error"
+            linkedin_jobs[job_id]["error"]  = str(e)
+            print(f"❌ LinkedIn bulk error: {e}")
+        finally:
+            loop.close()
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job_id, "targets": len(targets)}

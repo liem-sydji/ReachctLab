@@ -1,6 +1,6 @@
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 // Point this at your LAB backend (separate Railway project), NOT production.
-export const API = "https://reachctlab-production.up.railway.app";
+export const API = "http://localhost:8000";
 
 export const ADMIN_PASSWORD = "reachct2026";
 
@@ -16,7 +16,7 @@ export const COMPANY_TYPES_GROUPED = {
   "E": ["Economic Consulting Company", "Education Company", "Electrical Company", "Engineering Company", "Environmental Company"],
   "F": ["Fashion Company", "Finance Company", "Food Manufacturing Company", "Furniture Design Company"],
   "G": ["Graphic Design Company"],
-  "H": ["Hotel Company", "HR Company"],
+  "H": ["Hotel Company", "HR Company","Hostal","Host Family Organization"],
   "I": ["Interior Design Company", "IT Company", "IVD Company"],
   "J": ["Journalism Company"],
   "L": ["Language Academy", "Library Company", "Life Science Company", "Logistics Company"],
@@ -24,7 +24,7 @@ export const COMPANY_TYPES_GROUPED = {
   "O": ["Operations Company"],
   "P": ["Pharmaceutical Company", "PR Agency"],
   "R": ["Real Estate Company", "Research Institute", "Restaurant Company", "Retail Company"],
-  "S": ["Sales Company"],
+  "S": ["Sales Company","Student Apartment","Student Residence","Short Term Rental"],
   "T": ["Tourism Company", "Travel Agency"],
   "V": ["Veterinary Company"],
 };

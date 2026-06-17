@@ -72,6 +72,7 @@ def init_db():
             id         SERIAL PRIMARY KEY,
             user_id    INT REFERENCES users(id) ON DELETE CASCADE,
             name       TEXT NOT NULL,
+            kind       TEXT DEFAULT 'maps',
             created_at TIMESTAMP DEFAULT NOW()
         )
     """)
@@ -260,14 +261,14 @@ def get_filters() -> dict:
 
 # ── User databases ────────────────────────────────────────────────────────────
 
-def create_user_database(user_id: int, name: str) -> dict:
+def create_user_database(user_id: int, name: str, kind: str = "maps") -> dict:
     conn = get_conn()
     c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         c.execute("""
-            INSERT INTO user_databases (user_id, name)
-            VALUES (%s, %s) RETURNING *
-        """, (user_id, name))
+            INSERT INTO user_databases (user_id, name, kind)
+            VALUES (%s, %s, %s) RETURNING *
+        """, (user_id, name, kind))
         db = dict(c.fetchone())
         conn.commit()
         return db
@@ -646,5 +647,103 @@ def delete_template(template_id: int, user_id: int) -> bool:
         deleted = c.rowcount > 0
         conn.commit()
         return deleted
+    finally:
+        conn.close()
+
+
+# ── LinkedIn / People shared database ─────────────────────────────────────────
+
+def init_linkedin_table():
+    """Create the shared linkedin_contacts table and migrate kind column."""
+    conn = get_conn()
+    c    = conn.cursor()
+    try:
+        # Ensure kind column exists on user_databases (migration for existing dbs)
+        c.execute("ALTER TABLE user_databases ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT 'maps'")
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS linkedin_contacts (
+                id            SERIAL PRIMARY KEY,
+                full_name     TEXT NOT NULL,
+                job_title     TEXT DEFAULT '',
+                company       TEXT DEFAULT '',
+                email         TEXT DEFAULT '',
+                confidence    TEXT DEFAULT '',
+                linkedin_url  TEXT DEFAULT '',
+                location      TEXT DEFAULT '',
+                created_at    TIMESTAMP DEFAULT NOW(),
+                UNIQUE(linkedin_url)
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"⚠️  init_linkedin_table: {e}")
+    finally:
+        conn.close()
+
+
+def upsert_linkedin_contact(person: dict):
+    """Insert or update a LinkedIn contact in the shared DB."""
+    conn = get_conn()
+    c    = conn.cursor()
+    try:
+        c.execute("""
+            INSERT INTO linkedin_contacts
+                (full_name, job_title, company, email, confidence, linkedin_url, location)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (linkedin_url) DO UPDATE SET
+                full_name  = EXCLUDED.full_name,
+                job_title  = EXCLUDED.job_title,
+                company    = EXCLUDED.company,
+                email      = CASE WHEN EXCLUDED.email != '' THEN EXCLUDED.email ELSE linkedin_contacts.email END,
+                confidence = EXCLUDED.confidence,
+                location   = EXCLUDED.location
+        """, (
+            person.get("full_name",""), person.get("job_title",""),
+            person.get("company",""), person.get("email",""),
+            person.get("confidence",""), person.get("linkedin_url",""),
+            person.get("location",""),
+        ))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"⚠️  upsert_linkedin_contact: {e}")
+    finally:
+        conn.close()
+
+
+def get_linkedin_contacts(job_title: str = "", company: str = "", location: str = "") -> list:
+    """Pull LinkedIn contacts with optional filters."""
+    conn = get_conn()
+    c    = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    query  = "SELECT * FROM linkedin_contacts WHERE 1=1"
+    params = []
+    if job_title:
+        query += " AND job_title ILIKE %s"; params.append(f"%{job_title}%")
+    if company:
+        query += " AND company ILIKE %s"; params.append(f"%{company}%")
+    if location:
+        query += " AND location ILIKE %s"; params.append(f"%{location}%")
+    query += " ORDER BY created_at DESC LIMIT 500"
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_linkedin_filters() -> dict:
+    """Get distinct job titles, companies, locations for filter dropdowns."""
+    conn = get_conn()
+    c    = conn.cursor()
+    try:
+        c.execute("SELECT DISTINCT job_title FROM linkedin_contacts WHERE job_title != '' ORDER BY job_title")
+        titles = [r[0] for r in c.fetchall()]
+        c.execute("SELECT DISTINCT company FROM linkedin_contacts WHERE company != '' ORDER BY company")
+        companies = [r[0] for r in c.fetchall()]
+        c.execute("SELECT DISTINCT location FROM linkedin_contacts WHERE location != '' ORDER BY location")
+        locations = [r[0] for r in c.fetchall()]
+        return {"job_titles": titles, "companies": companies, "locations": locations}
+    except Exception:
+        return {"job_titles": [], "companies": [], "locations": []}
     finally:
         conn.close()

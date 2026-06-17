@@ -66,20 +66,37 @@ function LeftPanel({ user, onNav }) {
 
 function CreateDBModal({ onClose, onCreate }) {
   const [name, setName]       = useState("");
+  const [kind, setKind]       = useState("maps");
   const [loading, setLoading] = useState(false);
   const handleCreate = async () => {
     if (!name.trim()) return;
-    setLoading(true); await onCreate(name.trim()); setLoading(false);
+    setLoading(true); await onCreate(name.trim(), kind); setLoading(false);
   };
+  const kindCard = (value, icon, label, desc) => (
+    <div onClick={()=>setKind(value)} style={{
+      flex:1, border: kind===value ? "2px solid #E8005A" : "1.5px solid #333",
+      borderRadius:12, padding:"14px 12px", cursor:"pointer",
+      background: kind===value ? "rgba(232,0,90,0.08)" : "#111", transition:"all 0.15s" }}>
+      <div style={{ fontSize:22, marginBottom:6 }}>{icon}</div>
+      <div style={{ fontSize:13, fontWeight:700, color: kind===value ? "#E8005A" : "#fff" }}>{label}</div>
+      <div style={{ fontSize:11, color:"#888", marginTop:2, lineHeight:1.4 }}>{desc}</div>
+    </div>
+  );
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", zIndex:1000,
       display:"flex", alignItems:"center", justifyContent:"center" }} onClick={onClose}>
       <div style={{ background:"#1a1a1a", border:"1px solid #333", borderRadius:16,
-        padding:32, width:360 }} onClick={e=>e.stopPropagation()}>
+        padding:32, width:420 }} onClick={e=>e.stopPropagation()}>
         <h2 style={{ fontFamily:"'Syne',sans-serif", fontSize:20, fontWeight:800,
-          color:"#fff", marginBottom:8, letterSpacing:"-0.4px" }}>New DB</h2>
-        <p style={{ fontSize:13, color:"#666", marginBottom:20 }}>Give your database a name.</p>
-        <input autoFocus placeholder="e.g. IT Companies Germany" value={name}
+          color:"#fff", marginBottom:8, letterSpacing:"-0.4px" }}>New Database</h2>
+        <p style={{ fontSize:13, color:"#666", marginBottom:16 }}>Choose a type and give it a name.</p>
+
+        <div style={{ display:"flex", gap:10, marginBottom:20 }}>
+          {kindCard("maps", "🗺️", "Maps", "Companies — name, email, phone, website")}
+          {kindCard("linkedin", "🔗", "LinkedIn", "People — name, title, company, email")}
+        </div>
+
+        <input autoFocus placeholder={kind==="linkedin"?"e.g. HR Managers Spain":"e.g. IT Companies Germany"} value={name}
           onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleCreate()}
           style={{ width:"100%", padding:"10px 14px", borderRadius:10, border:"1.5px solid #333",
             background:"#111", color:"#fff", fontSize:14, fontFamily:"'DM Sans',sans-serif",
@@ -127,11 +144,11 @@ export default function DashboardPage() {
     setLoading(false);
   };
 
-  const handleCreate = async (name) => {
+  const handleCreate = async (name, kind="maps") => {
     try {
       const res = await fetch(`${API}/api/databases`, {
         method:"POST", headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
-        body:JSON.stringify({name}),
+        body:JSON.stringify({name, kind}),
       });
       const db = await res.json();
       setDatabases(prev=>[db,...prev]); setShowCreate(false);
@@ -205,9 +222,15 @@ export default function DashboardPage() {
                 onMouseLeave={e=>{ e.currentTarget.style.borderColor="#1e1e1e"; e.currentTarget.style.background="#111"; }}
                 onClick={()=>navigate(`/dashboard/db/${db.id}`)}>
                 <div>
-                  <div style={{ fontSize:10, color:"#E8005A", fontWeight:600,
-                    textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:6 }}>
-                    {db.role==="owner"?"Owner":db.role}</div>
+                  <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:6 }}>
+                    <span style={{ fontSize:10, color:"#E8005A", fontWeight:600,
+                      textTransform:"uppercase", letterSpacing:"0.06em" }}>
+                      {db.role==="owner"?"Owner":db.role}</span>
+                    <span style={{ fontSize:10, fontWeight:600, padding:"1px 7px", borderRadius:5,
+                      background: (db.kind==="linkedin") ? "rgba(10,102,194,0.15)" : "rgba(232,0,90,0.12)",
+                      color: (db.kind==="linkedin") ? "#4a9eff" : "#E8005A" }}>
+                      {db.kind==="linkedin" ? "🔗 LinkedIn" : "🗺️ Maps"}</span>
+                  </div>
                   <div style={{ fontFamily:"'Syne',sans-serif", fontSize:15, fontWeight:700,
                     color:"#fff", letterSpacing:"-0.3px", lineHeight:1.3 }}>{db.name}</div>
                 </div>
