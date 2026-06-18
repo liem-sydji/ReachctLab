@@ -1231,3 +1231,69 @@ def start_linkedin_smart(body: LinkedInSmartRequest, authorization: str = Header
 
     threading.Thread(target=run, daemon=True).start()
     return {"job_id": job_id, "total_companies": len(targets)}
+
+
+# ── URL List Scraper ──────────────────────────────────────────────────────────
+class URLScrapeRequest(BaseModel):
+    urls:         List[str]
+    company_type: str
+
+url_scrape_jobs: dict = {}
+
+@app.post("/api/scrape/urls")
+def start_url_scrape(body: URLScrapeRequest, authorization: str = Header(default=None)):
+    get_current_user(authorization)
+
+    urls = [u.strip() for u in body.urls if u.strip()]
+    if not urls:
+        raise HTTPException(status_code=400, detail="No URLs provided")
+    if not body.company_type.strip():
+        raise HTTPException(status_code=400, detail="Company type is required")
+
+    job_id = str(uuid.uuid4())[:8]
+    url_scrape_jobs[job_id] = {
+        "status":    "running",
+        "found":     0,
+        "skipped":   0,
+        "total":     len(urls),
+        "index":     0,
+        "processing": None,
+        "results":   [],
+        "skipped_urls": [],
+        "error":     None,
+    }
+
+    def run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            from webscraper import scrape_url_list
+            data = loop.run_until_complete(
+                scrape_url_list(urls, body.company_type.strip(), url_scrape_jobs, job_id)
+            )
+            # Save found companies to shared DB
+            run_id = f"url_{job_id}"
+            for company in data["found"]:
+                upsert_company(run_id, company)
+
+            url_scrape_jobs[job_id]["results"]      = data["found"]
+            url_scrape_jobs[job_id]["skipped_urls"] = data["skipped"]
+            url_scrape_jobs[job_id]["status"]       = "done"
+        except Exception as e:
+            url_scrape_jobs[job_id]["status"] = "error"
+            url_scrape_jobs[job_id]["error"]  = str(e)
+            print(f"❌ URL scrape error: {e}")
+        finally:
+            loop.close()
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job_id, "total": len(urls)}
+
+
+@app.get("/api/scrape/urls/status/{job_id}")
+def url_scrape_status(job_id: str, authorization: str = Header(default=None)):
+    get_current_user(authorization)
+    job = url_scrape_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job

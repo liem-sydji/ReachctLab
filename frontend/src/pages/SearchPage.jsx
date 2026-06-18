@@ -23,10 +23,14 @@ export default function SearchPage() {
         <button onClick={()=>setTab("linkedin")} style={tabStyle(tab==="linkedin")}>
           🔗 LinkedIn Search
         </button>
+        <button onClick={()=>setTab("urls")} style={tabStyle(tab==="urls")}>
+          🌐 Scrape from URLs
+        </button>
       </div>
 
       {tab === "maps"     && <MapsSearch user={user} token={token} navigate={navigate} />}
       {tab === "linkedin" && <LinkedInSearch user={user} token={token} />}
+      {tab === "urls"     && <URLScraper user={user} token={token} />}
     </div>
   );
 }
@@ -512,6 +516,148 @@ function LinkedInSearch({ user, token }) {
             email:r.email||"", linkedin_url:r.linkedin_url||"", location:r.location||"" }))}
           onClose={()=>setShowAddDB(false)}
         />
+      )}
+    </>
+  );
+}
+
+// ─── URL Scraper ──────────────────────────────────────────────────────────────
+function URLScraper({ user, token }) {
+  const [companyType, setCompanyType] = useState("");
+  const [urlText,     setUrlText]     = useState("");
+  const [loading,     setLoading]     = useState(false);
+  const [loadMsg,     setLoadMsg]     = useState("");
+  const [results,     setResults]     = useState([]);
+  const [skipped,     setSkipped]     = useState([]);
+  const [searched,    setSearched]    = useState(false);
+  const [error,       setError]       = useState("");
+  const [filters,     setFilters]     = useState({ company_types:[] });
+  const pollRef = useRef(null);
+
+  useEffect(() => {
+    fetch(`${API}/api/filters`).then(r=>r.json()).then(setFilters).catch(()=>{});
+  }, []);
+
+  const handleScrape = async () => {
+    const urls = urlText.split("\n").map(u=>u.trim()).filter(Boolean);
+    if (!companyType) { setError("Please select a company type."); return; }
+    if (!urls.length) { setError("Please paste at least one URL."); return; }
+    setError(""); setLoading(true); setSearched(false); setResults([]); setSkipped([]);
+    setLoadMsg("Starting URL scraper…");
+    try {
+      const res = await fetch(`${API}/api/scrape/urls`, {
+        method:"POST",
+        headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
+        body:JSON.stringify({ urls, company_type:companyType }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail||"Failed to start");
+
+      pollRef.current = setInterval(async () => {
+        try {
+          const jr = await fetch(`${API}/api/scrape/urls/status/${data.job_id}`, {
+            headers:{Authorization:`Bearer ${token}`},
+          });
+          const jd = await jr.json();
+          if (jd.status==="done") {
+            clearInterval(pollRef.current);
+            setResults(jd.results||[]); setSkipped(jd.skipped_urls||[]);
+            setSearched(true); setLoading(false);
+          } else if (jd.status==="error") {
+            clearInterval(pollRef.current); setError(jd.error||"Failed"); setLoading(false);
+          } else {
+            setLoadMsg(`Scraping ${jd.processing||"…"} (${jd.index||0}/${jd.total||0}) — ${jd.found||0} emails found`);
+          }
+        } catch {}
+      }, 3000);
+    } catch(e) { setError(e.message); setLoading(false); }
+  };
+
+  const handleCopy = () => {
+    if (!results.length) return;
+    const headers = ["Company Name","Email","Website","Company Type"];
+    const rows    = results.map(r=>[r.name||"",r.email||"",r.website||"",r.company_type||""]);
+    const tsv     = [headers,...rows].map(r=>r.join("\t")).join("\n");
+    navigator.clipboard.writeText(tsv).then(()=>alert("Copied!"));
+  };
+
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  return (
+    <>
+      <div className="form-area">
+        <div className="form-card">
+          <div className="form-title">Scrape Emails from URLs</div>
+          <p className="hint" style={{ marginTop:-4, marginBottom:16 }}>
+            Paste company website URLs — ReachCT visits each one and extracts emails. Companies without emails are skipped.
+          </p>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 2fr", gap:16, marginBottom:16 }}>
+            <div>
+              <label className="field-label">Company Type <span style={{color:"#E8005A"}}>*</span></label>
+              <select className="field-select" value={companyType} onChange={e=>setCompanyType(e.target.value)}>
+                <option value="">Select type…</option>
+                {Object.entries(COMPANY_TYPES_GROUPED).map(([letter, types]) => (
+                  <optgroup key={letter} label={`── ${letter} ──`}>
+                    {types.map(ct => <option key={ct} value={ct}>{ct}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+              <p style={{ fontSize:11, color:"#999", marginTop:6 }}>
+                All scraped companies will be saved with this type.
+              </p>
+            </div>
+            <div>
+              <label className="field-label">Website URLs (one per line)</label>
+              <textarea className="field-input" rows={8} value={urlText} onChange={e=>setUrlText(e.target.value)}
+                placeholder={"https://kreaset.com\nhttps://optimoclick.com\nhttps://theagency.es"}
+                style={{ resize:"vertical", fontFamily:"monospace", fontSize:12, lineHeight:1.6 }}/>
+            </div>
+          </div>
+          <div className="btn-row">
+            <button className="btn-primary" onClick={handleScrape} disabled={loading}>
+              <SearchIcon/>{loading?"Scraping…":"Scrape Emails"}
+            </button>
+          </div>
+          {error && <div className="error-msg">{error}</div>}
+          {loading && <div className="loading-area"><div className="spinner"/>
+            <p className="loading-msg">{loadMsg}</p></div>}
+        </div>
+      </div>
+
+      {searched && (
+        <div className="results-area">
+          <div className="results-header">
+            <div className="results-count">
+              <span>{results.length}</span> emails found &nbsp;·&nbsp;
+              <span style={{color:"#999"}}>{skipped.length}</span> skipped (no email)
+            </div>
+            <div className="btn-row">
+              <button className="btn-secondary" onClick={handleCopy}><CopyIcon/>Copy Table</button>
+            </div>
+          </div>
+          <div style={{ overflowX:"auto" }}>
+            <table className="results-table">
+              <thead><tr><th>Company</th><th>Email</th><th>Website</th><th>Type</th></tr></thead>
+              <tbody>
+                {results.map((r,i) => (
+                  <tr key={i}>
+                    <td style={{fontWeight:500}}>{r.name}</td>
+                    <td style={{color:"#E8005A"}}>{r.email}</td>
+                    <td><a href={r.website} target="_blank" rel="noreferrer"
+                      style={{color:"#666",fontSize:12}}>{r.website.replace(/https?:\/\/(www\.)?/,"").slice(0,35)}</a></td>
+                    <td style={{fontSize:12,color:"#888"}}>{r.company_type}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {skipped.length > 0 && (
+            <div style={{ marginTop:16, padding:"12px 16px", background:"#f9f9f9",
+              borderRadius:10, fontSize:12, color:"#999" }}>
+              <strong>Skipped (no email found):</strong> {skipped.join(", ")}
+            </div>
+          )}
+        </div>
       )}
     </>
   );
