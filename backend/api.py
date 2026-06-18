@@ -1152,8 +1152,9 @@ def start_linkedin_bulk(body: LinkedInBulkRequest, authorization: str = Header(d
 class LinkedInSmartRequest(BaseModel):
     company_type: str
     city:         str
-    role:         str = "HR Manager"
-    max_per_company: int = 3
+    role:         str = "HR"
+    start:        int = 0
+    end:          int = 25
 
 @app.post("/api/linkedin/smart")
 def start_linkedin_smart(body: LinkedInSmartRequest, authorization: str = Header(default=None)):
@@ -1173,7 +1174,10 @@ def start_linkedin_smart(body: LinkedInSmartRequest, authorization: str = Header
         raise HTTPException(status_code=404,
             detail=f"No companies found for {body.company_type} in {body.city}. Run a Google Maps search first.")
 
-    print(f"🔍 Smart LinkedIn: {len(companies)} companies found for {body.company_type} in {body.city}")
+    # Apply start/end range
+    total = len(companies)
+    companies = companies[body.start:body.end]
+    print(f"🔍 Smart LinkedIn: {len(companies)} companies (range {body.start}→{body.end} of {total}) for {body.company_type} in {body.city}")
 
     # Build targets from DB — company name + domain from website
     targets = []
@@ -1211,7 +1215,7 @@ def start_linkedin_smart(body: LinkedInSmartRequest, authorization: str = Header
             from linkedin import scrape_linkedin_bulk
             results = loop.run_until_complete(scrape_linkedin_bulk(
                 targets, body.role, body.city,
-                min(body.max_per_company, 5), linkedin_jobs, job_id
+                1, linkedin_jobs, job_id  # 1 person per company max
             ))
             for person in results:
                 if person.get("linkedin_url"):

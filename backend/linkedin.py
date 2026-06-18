@@ -196,11 +196,11 @@ async def scrape_linkedin_people(role: str, company: str, location: str,
     """Search LinkedIn for people using saved session cookies."""
     cookies = load_cookies()
 
-    # Build search query — filter empty strings to avoid double spaces
-    parts = [p for p in [role, company, location, keyword] if p and p.strip()]
+    # Build search query — company first for relevance, then role
+    parts = [p for p in [company, role, location, keyword] if p and p.strip()]
     query = " ".join(parts)
 
-    search_url = f"https://www.linkedin.com/search/results/people/?keywords={quote_plus(query)}&origin=GLOBAL_SEARCH_HEADER"
+    search_url = f"https://www.linkedin.com/search/results/people/?keywords={quote_plus(query)}&origin=GLOBAL_SEARCH_HEADER&sid=people"
     print(f"🔍 LinkedIn search: {query}")
 
     results = []
@@ -231,7 +231,9 @@ async def scrape_linkedin_people(role: str, company: str, location: str,
             seen_urls  = set()
             seen_names = set()
 
-            for link in profile_links:
+            # Cap how many links we inspect to avoid slow processing
+            max_links_to_check = max_results * 8
+            for link in profile_links[:max_links_to_check]:
                 if len(results) >= max_results:
                     break
                 try:
@@ -264,6 +266,14 @@ async def scrape_linkedin_people(role: str, company: str, location: str,
                     if any(x in name.lower() for x in ["linkedin", "sign in", "join", "notification", "search"]):
                         continue
 
+                    # Verify company name appears in profile text (person actually works there)
+                    if company:
+                        company_words = [w.lower() for w in company.split() if len(w) > 2]
+                        text_lower    = text.lower()
+                        if not any(w in text_lower for w in company_words):
+                            print(f"⏭️ Skipping {name} — company '{company}' not found in profile text")
+                            continue
+
                     # Email finding
                     email_data = {"email": "", "confidence": "none", "verified": False}
                     if domain:
@@ -284,6 +294,9 @@ async def scrape_linkedin_people(role: str, company: str, location: str,
 
                     if run_id in jobs:
                         jobs[run_id]["found"] = len(results)
+
+                    # Only need first valid person per company — stop immediately
+                    break
 
                 except Exception as e:
                     print(f"⚠️ Parse error: {e}")

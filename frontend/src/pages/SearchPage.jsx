@@ -208,8 +208,9 @@ function LinkedInSearch({ user, token }) {
   const [mode,           setMode]           = useState("smart"); // "smart" | "bulk"
   const [companyType,    setCompanyType]    = useState("");
   const [city,           setCity]           = useState("");
-  const [role,           setRole]           = useState("HR Manager");
-  const [maxPerCompany,  setMaxPerCompany]  = useState(3);
+  const [role,           setRole]           = useState("HR");
+  const [start,          setStart]          = useState(0);
+  const [end,            setEnd]            = useState(25);
   // Bulk state
   const [bulkText,       setBulkText]       = useState("");
   const [bulkDbId,       setBulkDbId]       = useState(0);
@@ -260,7 +261,7 @@ function LinkedInSearch({ user, token }) {
       const res = await fetch(`${API}/api/linkedin/smart`, {
         method:"POST",
         headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
-        body:JSON.stringify({ company_type:companyType, city, role, max_per_company:Number(maxPerCompany) }),
+        body:JSON.stringify({ company_type:companyType, city, role, start:Number(start), end:Number(end) }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail||"Failed");
@@ -372,7 +373,7 @@ function LinkedInSearch({ user, token }) {
               : "Paste emails, domains, or company names (one per line) — or pull from a Maps database."}
           </p>
           {mode==="smart" ? (
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16, marginBottom:16 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 0.5fr 0.5fr", gap:16, marginBottom:16 }}>
             <div>
               <label className="field-label">Company Type</label>
               <select className="field-select" value={companyType} onChange={e=>setCompanyType(e.target.value)}>
@@ -390,18 +391,24 @@ function LinkedInSearch({ user, token }) {
             <div>
               <label className="field-label">Role to find</label>
               <input className="field-input" value={role} onChange={e=>setRole(e.target.value)}
-                placeholder="e.g. HR Manager, Director"/>
+                placeholder="e.g. HR, Director"/>
             </div>
             <div>
-              <label className="field-label">Max people per company</label>
-              <input className="field-input" type="number" min="1" max="5" value={maxPerCompany}
-                onChange={e=>{ const v=e.target.value; setMaxPerCompany(v===""?"":Math.min(Number(v),5)); }}
-                onBlur={e=>{ if(e.target.value==="") setMaxPerCompany(3); }}/>
+              <label className="field-label">Start company</label>
+              <input className="field-input" type="number" min="0" value={start}
+                onChange={e=>{ const v=e.target.value; setStart(v===""?"":Number(v)); }}
+                onBlur={e=>{ if(e.target.value==="") setStart(0); }}/>
             </div>
-            <div style={{ gridColumn:"span 2", background:"rgba(232,0,90,0.04)", border:"1px solid rgba(232,0,90,0.15)",
+            <div>
+              <label className="field-label">End company</label>
+              <input className="field-input" type="number" min="1" value={end}
+                onChange={e=>{ const v=e.target.value; setEnd(v===""?"":Number(v)); }}
+                onBlur={e=>{ if(e.target.value==="") setEnd(25); }}/>
+            </div>
+            <div style={{ gridColumn:"span 5", background:"rgba(232,0,90,0.04)", border:"1px solid rgba(232,0,90,0.15)",
               borderRadius:10, padding:"12px 16px", fontSize:12, color:"#666" }}>
-              💡 ReachCT will pull all <strong>{companyType||"companies"}</strong> in <strong>{city||"selected city"}</strong> from
-              the shared database, search LinkedIn for <strong>{role}</strong> at each one, and auto-find their emails using the company domain.
+              💡 ReachCT will pull <strong>{companyType||"companies"}</strong> in <strong>{city||"selected city"}</strong> (companies {start}→{end})
+              from the database and find the most relevant <strong>{role}</strong> at each company — 1 person per company.
             </div>
           </div>
           ) : (
