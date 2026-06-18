@@ -1146,3 +1146,84 @@ def start_linkedin_bulk(body: LinkedInBulkRequest, authorization: str = Header(d
 
     threading.Thread(target=run, daemon=True).start()
     return {"job_id": job_id, "targets": len(targets)}
+
+
+# ── LinkedIn Smart Search (uses companies DB) ─────────────────────────────────
+class LinkedInSmartRequest(BaseModel):
+    company_type: str
+    city:         str
+    role:         str = "HR Manager"
+    max_per_company: int = 3
+
+@app.post("/api/linkedin/smart")
+def start_linkedin_smart(body: LinkedInSmartRequest, authorization: str = Header(default=None)):
+    """
+    Smart LinkedIn search — pulls companies from shared DB by type+city,
+    then searches LinkedIn for decision makers at each company.
+    """
+    get_current_user(authorization)
+
+    # Get companies from shared DB matching type + city
+    companies = get_companies(
+        queries=[body.company_type],
+        cities=[body.city.strip().title()]
+    )
+
+    if not companies:
+        raise HTTPException(status_code=404,
+            detail=f"No companies found for {body.company_type} in {body.city}. Run a Google Maps search first.")
+
+    print(f"🔍 Smart LinkedIn: {len(companies)} companies found for {body.company_type} in {body.city}")
+
+    # Build targets from DB — company name + domain from website
+    targets = []
+    for c in companies:
+        name    = c.get("name", "")
+        website = c.get("website", "")
+        email   = c.get("email", "")
+        # Extract domain from website or email
+        domain = ""
+        if website:
+            domain = website.lower().replace("https://","").replace("http://","").replace("www.","").strip("/").split("/")[0]
+        elif email and "@" in email:
+            domain = email.split("@")[-1].strip().lower()
+        if name:
+            targets.append({"company": name, "domain": domain})
+
+    if not targets:
+        raise HTTPException(status_code=404, detail="No valid company targets found")
+
+    job_id = str(uuid.uuid4())[:8]
+    linkedin_jobs[job_id] = {
+        "status":           "running",
+        "found":            0,
+        "results":          [],
+        "error":            None,
+        "processing":       None,
+        "company_index":    0,
+        "total_companies":  len(targets),
+    }
+
+    def run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            from linkedin import scrape_linkedin_bulk
+            results = loop.run_until_complete(scrape_linkedin_bulk(
+                targets, body.role, body.city,
+                min(body.max_per_company, 5), linkedin_jobs, job_id
+            ))
+            for person in results:
+                if person.get("linkedin_url"):
+                    upsert_linkedin_contact(person)
+            linkedin_jobs[job_id]["results"] = results
+            linkedin_jobs[job_id]["status"]  = "done"
+        except Exception as e:
+            linkedin_jobs[job_id]["status"] = "error"
+            linkedin_jobs[job_id]["error"]  = str(e)
+            print(f"❌ LinkedIn smart search error: {e}")
+        finally:
+            loop.close()
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job_id": job_id, "total_companies": len(targets)}

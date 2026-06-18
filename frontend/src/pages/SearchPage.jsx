@@ -205,32 +205,69 @@ function MapsSearch({ user, token, navigate }) {
 
 // ─── LinkedIn Search (new) ────────────────────────────────────────────────────
 function LinkedInSearch({ user, token }) {
-  const [mode,     setMode]     = useState("single"); // "single" | "bulk"
-  const [role,     setRole]     = useState("");
-  const [company,  setCompany]  = useState("");
-  const [location, setLocation] = useState("");
-  const [keyword,  setKeyword]  = useState("");
-  const [domain,   setDomain]   = useState("");
-  const [maxResults, setMaxResults] = useState(15);
+  const [mode,           setMode]           = useState("smart"); // "smart" | "bulk"
+  const [companyType,    setCompanyType]    = useState("");
+  const [city,           setCity]           = useState("");
+  const [role,           setRole]           = useState("HR Manager");
+  const [maxPerCompany,  setMaxPerCompany]  = useState(3);
   // Bulk state
-  const [bulkText, setBulkText]   = useState("");
-  const [bulkDbId, setBulkDbId]   = useState(0);
-  const [maxPerCompany, setMaxPerCompany] = useState(5);
-  const [mapsDatabases, setMapsDatabases] = useState([]);
-  const [loading,  setLoading]  = useState(false);
-  const [loadMsg,  setLoadMsg]  = useState("");
-  const [results,  setResults]  = useState([]);
-  const [searched, setSearched] = useState(false);
-  const [error,    setError]    = useState("");
-  const [showAddDB, setShowAddDB] = useState(false);
+  const [bulkText,       setBulkText]       = useState("");
+  const [bulkDbId,       setBulkDbId]       = useState(0);
+  const [mapsDatabases,  setMapsDatabases]  = useState([]);
+  const [filters,        setFilters]        = useState({ company_types:[], cities:{} });
+  const [loading,        setLoading]        = useState(false);
+  const [loadMsg,        setLoadMsg]        = useState("");
+  const [results,        setResults]        = useState([]);
+  const [searched,       setSearched]       = useState(false);
+  const [error,          setError]          = useState("");
+  const [showAddDB,      setShowAddDB]      = useState(false);
   const pollRef = useRef(null);
 
   useEffect(() => {
+    fetch(`${API}/api/filters`).then(r=>r.json()).then(setFilters).catch(()=>{});
     fetch(`${API}/api/databases`, { headers:{Authorization:`Bearer ${token}`} })
       .then(r=>r.json())
-      .then(d => setMapsDatabases((Array.isArray(d)?d:[]).filter(db => (db.kind||"maps")==="maps")))
+      .then(d => setMapsDatabases((Array.isArray(d)?d:[]).filter(db=>(db.kind||"maps")==="maps")))
       .catch(()=>{});
   }, [token]);
+
+  const allCities = filters?.cities ? Object.values(filters.cities).flat() : [];
+
+  const pollJob = (jobId) => {
+    pollRef.current = setInterval(async () => {
+      try {
+        const jr = await fetch(`${API}/api/linkedin/status/${jobId}`, {
+          headers:{Authorization:`Bearer ${token}`},
+        });
+        const jd = await jr.json();
+        if (jd.status==="done") {
+          clearInterval(pollRef.current);
+          setResults(jd.results||[]); setSearched(true); setLoading(false);
+        } else if (jd.status==="error") {
+          clearInterval(pollRef.current); setError(jd.error||"Search failed"); setLoading(false);
+        } else {
+          setLoadMsg(`Searching ${jd.processing||"…"} (${jd.company_index||0}/${jd.total_companies||0}) — ${jd.found||0} people found`);
+        }
+      } catch {}
+    }, 3000);
+  };
+
+  const handleSmartSearch = async () => {
+    if (!companyType || !city) { setError("Please select a company type and city."); return; }
+    setError(""); setLoading(true); setSearched(false); setResults([]);
+    setLoadMsg("Looking up companies in database…");
+    try {
+      const res = await fetch(`${API}/api/linkedin/smart`, {
+        method:"POST",
+        headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
+        body:JSON.stringify({ company_type:companyType, city, role, max_per_company:Number(maxPerCompany) }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail||"Failed");
+      setLoadMsg(`Found ${data.total_companies} companies — searching LinkedIn for ${role}…`);
+      pollJob(data.job_id);
+    } catch (e) { setError(e.message); setLoading(false); }
+  };
 
   const handleBulkSearch = async () => {
     const items = bulkText.split("\n").map(l=>l.trim()).filter(Boolean);
@@ -243,26 +280,11 @@ function LinkedInSearch({ user, token }) {
       const res = await fetch(`${API}/api/linkedin/bulk`, {
         method:"POST",
         headers:{"Content-Type":"application/json", Authorization:`Bearer ${token}`},
-        body:JSON.stringify({ items, from_db_id:Number(bulkDbId), role, location, max_per_company:Number(maxPerCompany) }),
+        body:JSON.stringify({ items, from_db_id:Number(bulkDbId), role, location:city, max_per_company:Number(maxPerCompany) }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail||"Failed to start bulk search");
-      pollRef.current = setInterval(async () => {
-        try {
-          const jr = await fetch(`${API}/api/linkedin/status/${data.job_id}`, {
-            headers:{Authorization:`Bearer ${token}`},
-          });
-          const jd = await jr.json();
-          if (jd.status==="done") {
-            clearInterval(pollRef.current);
-            setResults(jd.results||[]); setSearched(true); setLoading(false);
-          } else if (jd.status==="error") {
-            clearInterval(pollRef.current); setError(jd.error||"Search failed"); setLoading(false);
-          } else {
-            setLoadMsg(`Searching ${jd.processing||"…"} (${jd.company_index||0}/${jd.total_companies||0}) — ${jd.found||0} people found`);
-          }
-        } catch {}
-      }, 3000);
+      if (!res.ok) throw new Error(data.detail||"Failed");
+      pollJob(data.job_id);
     } catch (e) { setError(e.message); setLoading(false); }
   };
 
@@ -332,11 +354,11 @@ function LinkedInSearch({ user, token }) {
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
             <div className="form-title" style={{ margin:0 }}>Find People on LinkedIn</div>
             <div style={{ display:"flex", gap:4, background:"#f0f0f0", borderRadius:8, padding:3 }}>
-              <button onClick={()=>setMode("single")} style={{
+              <button onClick={()=>setMode("smart")} style={{
                 padding:"5px 14px", borderRadius:6, border:"none", cursor:"pointer", fontSize:12, fontWeight:600,
                 fontFamily:"'DM Sans',sans-serif",
-                background: mode==="single"?"#fff":"transparent", color: mode==="single"?"#E8005A":"#888",
-                boxShadow: mode==="single"?"0 1px 3px rgba(0,0,0,0.1)":"none" }}>Single</button>
+                background: mode==="smart"?"#fff":"transparent", color: mode==="smart"?"#E8005A":"#888",
+                boxShadow: mode==="smart"?"0 1px 3px rgba(0,0,0,0.1)":"none" }}>Smart</button>
               <button onClick={()=>setMode("bulk")} style={{
                 padding:"5px 14px", borderRadius:6, border:"none", cursor:"pointer", fontSize:12, fontWeight:600,
                 fontFamily:"'DM Sans',sans-serif",
@@ -345,42 +367,41 @@ function LinkedInSearch({ user, token }) {
             </div>
           </div>
           <p className="hint" style={{ marginTop:-4, marginBottom:16 }}>
-            {mode==="single"
-              ? "Search LinkedIn for decision makers. Add a company domain to auto-find & verify their email."
-              : "Paste emails, domains, or company names (one per line) — or pull from a Maps database — to find decision makers at each."}
+            {mode==="smart"
+              ? "Pulls companies from your ReachCT database and automatically finds decision makers on LinkedIn."
+              : "Paste emails, domains, or company names (one per line) — or pull from a Maps database."}
           </p>
-          {mode==="single" ? (
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
+          {mode==="smart" ? (
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16, marginBottom:16 }}>
             <div>
-              <label className="field-label">Role / Job Title</label>
+              <label className="field-label">Company Type</label>
+              <select className="field-select" value={companyType} onChange={e=>setCompanyType(e.target.value)}>
+                <option value="">Select company type…</option>
+                {(filters?.company_types||[]).map(ct => <option key={ct} value={ct}>{ct}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="field-label">City</label>
+              <select className="field-select" value={city} onChange={e=>setCity(e.target.value)}>
+                <option value="">Select city…</option>
+                {allCities.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="field-label">Role to find</label>
               <input className="field-input" value={role} onChange={e=>setRole(e.target.value)}
-                placeholder="e.g. HR Manager, Director (comma = OR)"/>
+                placeholder="e.g. HR Manager, Director"/>
             </div>
             <div>
-              <label className="field-label">Company / Keyword</label>
-              <input className="field-input" value={company} onChange={e=>setCompany(e.target.value)}
-                placeholder="e.g. Kreaset"/>
+              <label className="field-label">Max people per company</label>
+              <input className="field-input" type="number" min="1" max="5" value={maxPerCompany}
+                onChange={e=>{ const v=e.target.value; setMaxPerCompany(v===""?"":Math.min(Number(v),5)); }}
+                onBlur={e=>{ if(e.target.value==="") setMaxPerCompany(3); }}/>
             </div>
-            <div>
-              <label className="field-label">Extra Keyword (optional)</label>
-              <input className="field-input" value={keyword} onChange={e=>setKeyword(e.target.value)}
-                placeholder="e.g. au pair, host family"/>
-            </div>
-            <div>
-              <label className="field-label">Location <span style={{color:"#E8005A"}}>★ Recommended</span></label>
-              <input className="field-input" value={location} onChange={e=>setLocation(e.target.value)}
-                placeholder="e.g. Barcelona — improves profile accuracy"/>
-            </div>
-            <div>
-              <label className="field-label">Company Domain (for email finding)</label>
-              <input className="field-input" value={domain} onChange={e=>setDomain(e.target.value)}
-                placeholder="e.g. kreaset.com"/>
-            </div>
-            <div>
-              <label className="field-label">Max Results</label>
-              <input className="field-input" type="number" min="1" max="30" value={maxResults}
-                onChange={e=>{ const v=e.target.value; setMaxResults(v===""?"":Math.min(Number(v),30)); }}
-                onBlur={e=>{ if(e.target.value==="") setMaxResults(15); }}/>
+            <div style={{ gridColumn:"span 2", background:"rgba(232,0,90,0.04)", border:"1px solid rgba(232,0,90,0.15)",
+              borderRadius:10, padding:"12px 16px", fontSize:12, color:"#666" }}>
+              💡 ReachCT will pull all <strong>{companyType||"companies"}</strong> in <strong>{city||"selected city"}</strong> from
+              the shared database, search LinkedIn for <strong>{role}</strong> at each one, and auto-find their emails using the company domain.
             </div>
           </div>
           ) : (
@@ -425,8 +446,8 @@ function LinkedInSearch({ user, token }) {
               : "💡 Bulk mode auto-detects each line. Domains are extracted from emails for email finding."}
           </p>
           <div className="btn-row">
-            <button className="btn-primary" onClick={mode==="single"?handleSearch:handleBulkSearch} disabled={loading}>
-              <SearchIcon/>{loading?"Searching…":(mode==="single"?"Search LinkedIn":"Run Bulk Search")}
+            <button className="btn-primary" onClick={mode==="smart"?handleSmartSearch:handleBulkSearch} disabled={loading}>
+              <SearchIcon/>{loading?"Searching…":(mode==="smart"?"Find People":"Run Bulk Search")}
             </button>
           </div>
           {error && <div className="error-msg">{error}</div>}
