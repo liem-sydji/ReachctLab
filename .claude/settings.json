@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(py -m py_compile backend/reachct.py backend/webscraper.py)",
+      "PowerShell(if \\($?\\) { \"compile OK\" })"
+    ]
+  }
+}

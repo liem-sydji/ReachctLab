@@ -29,6 +29,8 @@ export const COMPANY_TYPES_GROUPED = {
   "S": ["Sales Company","Student Apartment","Student Residence","Software Company","Startup","Short Term Rental"],
   "T": ["Tourism Company", "Travel Agency"],
   "V": ["Veterinary Company"],
+  "W": ["Web Design"],
+  "Z": ["Zoo"]
 };
 
 // ─── GLOBAL STYLES ────────────────────────────────────────────────────────────
