@@ -14,7 +14,7 @@ export const COMPANY_TYPES_GROUPED = {
   "B": ["Biomedical Research Center", "Biotech Company", "Branding Agency", "Business Analytics", "Business Company"],
   "C": ["Childcare Company", "Clinical Laboratory", "Consulting Company", "Cosmetics Company"],
   "D": ["Data Analytics Company", "Data Science Company", "Design Company", "Diagnostic Laboratory", "Diagnostics Company", "Digital Marketing Agency"],
-  "E": ["Economic Consulting Company", "Education Company", "Electrical Company", "Engineering Company", "Environmental Company"],
+  "E": ["Economic Consulting Company", "Education Company","Event Company", "Electrical Company", "Engineering Company", "Environmental Company"],
   "F": ["Fashion Company", "Finance Company", "Food Manufacturing Company", "Furniture Design Company"],
   "G": ["Graphic Design Company"],
   "H": ["Hotel Company", "HR Company","Hostal","Host Family Organization"],
